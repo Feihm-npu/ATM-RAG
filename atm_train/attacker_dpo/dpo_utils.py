@@ -1,5 +1,51 @@
+import warnings
 import numpy as np
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torch.utils.data import Dataset, DataLoader
+from typing import Optional, List, Tuple, Dict, Union, Any, Callable, Literal
+from contextlib import contextmanager, nullcontext
+from collections import defaultdict
+from functools import wraps
+import random
+from copy import deepcopy
+from tqdm import tqdm
+from transformers import get_scheduler
+
+# Transformers 相关库
+# from transformers import (
+#     TrainingArguments,
+#     AutoModelForCausalLM,
+#     PreTrainedModel,
+#     PreTrainedTokenizerBase,
+#     TrainerCallback,
+#     DataCollator,
+# )
+# from transformers.trainer_utils import EvalLoopOutput
+from trl.trainer.dpo_trainer import Trainer
+# TRL (Transformers Reinforcement Learning) 相关库
 from trl.trainer.dpo_trainer import *
+from transformers import TrainingArguments
+from trl.trainer.utils import DPODataCollatorWithPadding, disable_dropout_in_model, pad_to_length
+from trl.models import create_reference_model
+# from trl.trainer.utils import disable_dropout_in_model, pad_to_length
+# from trl.trainer.peft import (
+#     is_peft_available,
+#     get_peft_model,
+#     PeftModel,
+#     peft_module_casting_to_bf16,
+#     prepare_model_for_kbit_training,
+# )
+# from trl.trainer.utils import create_reference_model
+
+# DeepSpeed 相关库
+import deepspeed
+
+# Hugging Face 加速库
+from accelerate import PartialState
+
+
 
 truncation_mode = 'keep_end'
 label_pad_token_id = -100
@@ -109,13 +155,14 @@ def tokenize_row(feature, tokenizer):
         )
 
     # add BOS token to head of prompt
-    prompt_tokens["prompt_input_ids"] = [tokenizer.bos_token_id] + prompt_tokens["prompt_input_ids"]
-    chosen_tokens["prompt_input_ids"] = [tokenizer.bos_token_id] + chosen_tokens["prompt_input_ids"]
-    rejected_tokens["prompt_input_ids"] = [tokenizer.bos_token_id] + rejected_tokens["prompt_input_ids"]
+    if tokenizer.bos_token_id is not None:
+        prompt_tokens["prompt_input_ids"] = [tokenizer.bos_token_id] + prompt_tokens["prompt_input_ids"]
+        chosen_tokens["prompt_input_ids"] = [tokenizer.bos_token_id] + chosen_tokens["prompt_input_ids"]
+        rejected_tokens["prompt_input_ids"] = [tokenizer.bos_token_id] + rejected_tokens["prompt_input_ids"]
 
-    prompt_tokens["prompt_attention_mask"] = [1] + prompt_tokens["prompt_attention_mask"]
-    chosen_tokens["prompt_attention_mask"] = [1] + chosen_tokens["prompt_attention_mask"]
-    rejected_tokens["prompt_attention_mask"] = [1] + rejected_tokens["prompt_attention_mask"]
+        prompt_tokens["prompt_attention_mask"] = [1] + prompt_tokens["prompt_attention_mask"]
+        chosen_tokens["prompt_attention_mask"] = [1] + chosen_tokens["prompt_attention_mask"]
+        rejected_tokens["prompt_attention_mask"] = [1] + rejected_tokens["prompt_attention_mask"]
 
     # add EOS token to end of answer
     chosen_tokens["input_ids"].append(tokenizer.eos_token_id)
@@ -170,6 +217,7 @@ def tokenize_row(feature, tokenizer):
                 continue
             batch[f"{k}{type_key}"] = tokens
 
+    # print(f"From tokenize_row tokenize_row output: {batch}")  # 调试信息
 
     return batch
 
@@ -510,7 +558,7 @@ class DPOTrainer(Trainer):
             optimizers=optimizers,
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         )
-
+        print(f'In init, type of model is on {self.model.device}')
         # Add tags for models that have been loaded with the correct transformers version
         if hasattr(self.model, "add_model_tags"):
             self.model.add_model_tags(self._tag_names)
@@ -537,6 +585,7 @@ class DPOTrainer(Trainer):
                 self.ref_model = self._prepare_deepspeed(self.ref_model)
             else:
                 self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
+        print(f'After init, the type of self.model={type(self.model)}')
 
     def _prepare_deepspeed(self, model: PreTrainedModelWrapper):
         # Adapted from accelerate: https://github.com/huggingface/accelerate/blob/739b135f8367becb67ffaada12fe76e3aa60fefd/src/accelerate/accelerator.py#L1473
@@ -773,13 +822,14 @@ class DPOTrainer(Trainer):
                 )
 
             # add BOS token to head of prompt
-            prompt_tokens["prompt_input_ids"] = [self.tokenizer.bos_token_id] + prompt_tokens["prompt_input_ids"]
-            chosen_tokens["prompt_input_ids"] = [self.tokenizer.bos_token_id] + chosen_tokens["prompt_input_ids"]
-            rejected_tokens["prompt_input_ids"] = [self.tokenizer.bos_token_id] + rejected_tokens["prompt_input_ids"]
+            if tokenizer.bos_token_id is not None:
+                prompt_tokens["prompt_input_ids"] = [self.tokenizer.bos_token_id] + prompt_tokens["prompt_input_ids"]
+                chosen_tokens["prompt_input_ids"] = [self.tokenizer.bos_token_id] + chosen_tokens["prompt_input_ids"]
+                rejected_tokens["prompt_input_ids"] = [self.tokenizer.bos_token_id] + rejected_tokens["prompt_input_ids"]
 
-            prompt_tokens["prompt_attention_mask"] = [1] + prompt_tokens["prompt_attention_mask"]
-            chosen_tokens["prompt_attention_mask"] = [1] + chosen_tokens["prompt_attention_mask"]
-            rejected_tokens["prompt_attention_mask"] = [1] + rejected_tokens["prompt_attention_mask"]
+                prompt_tokens["prompt_attention_mask"] = [1] + prompt_tokens["prompt_attention_mask"]
+                chosen_tokens["prompt_attention_mask"] = [1] + chosen_tokens["prompt_attention_mask"]
+                rejected_tokens["prompt_attention_mask"] = [1] + rejected_tokens["prompt_attention_mask"]
 
             # add EOS token to end of answer
             chosen_tokens["input_ids"].append(self.tokenizer.eos_token_id)
@@ -836,13 +886,13 @@ class DPOTrainer(Trainer):
 
         else:
             chosen_tokens = self.tokenizer(
-                chosen, truncation=True, max_length=self.max_target_length, add_special_tokens=True
+                chosen, truncation=True, max_length=self.max_target_length, add_special_tokens=False
             )
             rejected_tokens = self.tokenizer(
-                rejected, truncation=True, max_length=self.max_target_length, add_special_tokens=True
+                rejected, truncation=True, max_length=self.max_target_length, add_special_tokens=False
             )
             prompt_tokens = self.tokenizer(
-                prompt, truncation=True, max_length=self.max_prompt_length, add_special_tokens=True
+                prompt, truncation=True, max_length=self.max_prompt_length, add_special_tokens=False
             )
 
             batch["chosen_labels"] = chosen_tokens["input_ids"]
@@ -1180,7 +1230,7 @@ class DPOTrainer(Trainer):
 
         return losses.mean(), metrics
 
-    def compute_loss(
+    def compute_loss_dpo(
         self,
         model: Union[PreTrainedModel, nn.Module],
         inputs: Dict[str, Union[torch.Tensor, Any]],
@@ -1206,9 +1256,22 @@ class DPOTrainer(Trainer):
             return (loss, metrics)
         return loss
 
-    def get_batch_samples(self, model, batch: Dict[str, torch.LongTensor]) -> Tuple[str, str]:
+    def generate_from_model_and_ref(self, model, batch: Dict[str, torch.LongTensor]) -> Tuple[str, str]:
         """Generate samples from the model and reference model for the given batch of inputs."""
+        # if isinstance(model, str):
+        #     raise ValueError("Error: model is a string, expected a PyTorch model")
+        device = model.device  # 确保设备一致
+        print(f'model device {device}')
+        batch["prompt_input_ids"] = batch["prompt_input_ids"].to(device)
+        batch["prompt_attention_mask"] = batch["prompt_attention_mask"].to(device)
 
+        if "reference_output" in batch:
+            batch["reference_output"] = batch["reference_output"].to(device)
+
+        # if isinstance(model, torch.nn.Module):
+        #     print("Model is correctly a torch.nn.Module")
+        # else:
+        #     print("Warning: Model type is incorrect!")
         # If one uses `generate_during_eval` with peft + bf16, we need to explicitly call generate with
         # the torch cuda amp context manager as some hidden states are silently casted to full precision.
         generate_context_manager = nullcontext if not self._peft_has_been_casted_to_bf16 else torch.cuda.amp.autocast
@@ -1322,7 +1385,7 @@ class DPOTrainer(Trainer):
             random_batch = self.data_collator(random_batch_dataset)
             random_batch = self._prepare_inputs(random_batch)
 
-            policy_output_decoded, ref_output_decoded = self.get_batch_samples(self.model, random_batch)
+            policy_output_decoded, ref_output_decoded = self.generate_from_model_and_ref(self.model, random_batch)
 
             self.log(
                 {
@@ -1371,3 +1434,122 @@ class DPOTrainer(Trainer):
         kwargs = trl_sanitze_kwargs_for_tagging(model=self.model, tag_names=self._tag_names, kwargs=kwargs)
 
         return super().push_to_hub(commit_message=commit_message, blocking=blocking, **kwargs)
+
+    def train(
+        self,
+        resume_from_checkpoint: Optional[Union[str, bool]] = None,
+        trial: Union["optuna.Trial", Dict[str, Any]] = None,
+        ignore_keys_for_eval: Optional[list] = None,
+        **kwargs,
+    ):
+        """
+        Overriding the train method to integrate custom loss computation (compute_loss_dpo)
+        and custom sample generation (generate_from_model_and_ref).
+        """
+
+        if resume_from_checkpoint is False:
+            resume_from_checkpoint = None
+
+        # Start memory tracking
+        self._memory_tracker.start()
+
+        args = self.args
+        self.is_in_train = True
+
+        # Handle hyperparameter tuning
+        self._hp_search_setup(trial)
+
+        # Check if we should resume training from checkpoint
+        if isinstance(resume_from_checkpoint, bool) and resume_from_checkpoint:
+            resume_from_checkpoint = self._get_last_checkpoint(args.output_dir)
+            if resume_from_checkpoint is None:
+                raise ValueError(f"No valid checkpoint found in output directory ({args.output_dir})")
+
+        if resume_from_checkpoint is not None:
+            self._load_from_checkpoint(resume_from_checkpoint)
+
+        # Ensure model is on the correct device
+        if self.place_model_on_device:
+            self._move_model_to_device(self.model, args.device)
+        self.model_wrapped = self.model
+
+        # Training loop
+        inner_training_loop = self._inner_training_loop(
+            args=args,
+            resume_from_checkpoint=resume_from_checkpoint,
+            trial=trial,
+            ignore_keys_for_eval=ignore_keys_for_eval,
+        )
+        return inner_training_loop
+
+    def _inner_training_loop(
+        self, args, resume_from_checkpoint, trial, ignore_keys_for_eval
+    ):
+        """
+        Inner training loop where we override batch processing
+        """
+        self.model.train()
+        device = self.accelerator.device
+        self.model = self.model.to(device)
+        self.optimizer = torch.optim.Adam(self.model.parameters())
+        train_dataloader = self.get_train_dataloader()
+        self.model, self.optimizer, train_dataloader = self.accelerator.prepare(self.model, self.optimizer, train_dataloader)
+        self.lr_scheduler = get_scheduler(
+            name="linear",  # 或者 "cosine", "cosine_with_restarts", 具体看你的需求
+            optimizer=self.optimizer,
+            num_warmup_steps=self.args.warmup_steps,
+            num_training_steps=self.args.max_steps,  # 或者 `len(train_dataloader) * self.args.num_train_epochs`
+        )
+        for step, batch in enumerate(train_dataloader):
+            batch = self._prepare_inputs(batch)
+            # batch = batch.to(device)
+            # Generate samples using the new method
+            policy_output_decoded, ref_output_decoded = self.generate_from_model_and_ref(self.model, batch)
+            
+            # Compute custom loss using the new method
+            loss = self.compute_loss_dpo(self.model, batch)
+            
+            # Backpropagation
+            self.accelerator.backward(loss)
+            self.optimizer.step()
+            self.lr_scheduler.step()
+            self.optimizer.zero_grad()
+
+            # Logging
+            if step % args.logging_steps == 0:
+                self.log({"loss": loss.item()})
+
+        # Save the final model
+        self.save_model(os.path.join(args.output_dir, "model_final"))
+        """
+        Override the train method to ensure the proper logging and handling of DPO-specific training.
+
+        Args:
+            resume_from_checkpoint (Optional[str]): Path to a checkpoint if resuming training.
+            trial (Optional[dict]): A dictionary used for hyperparameter tuning.
+            ignore_keys_for_eval (Optional[List[str]]): Keys to ignore during evaluation.
+
+        Returns:
+            `transformers.TrainerState`: The state of the trainer after training.
+        """
+        # Ensure reference model is properly prepared before training
+        if self.ref_model is not None:
+            if self.is_deepspeed_enabled:
+                self.ref_model = self._prepare_deepspeed(self.ref_model)
+            else:
+                self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
+
+        # Log before training starts
+        self.log({"train_start": True})
+
+        # Call the original train method from Trainer
+        train_output = super().train(
+            resume_from_checkpoint=resume_from_checkpoint,
+            trial=trial,
+            ignore_keys_for_eval=ignore_keys_for_eval,
+        )
+
+        # Log after training ends
+        self.log({"train_end": True})
+
+        return train_output

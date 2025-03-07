@@ -22,10 +22,8 @@ from transformers import (
     Seq2SeqTrainer,
 )
 from torch.utils.tensorboard import SummaryWriter
-from transformers.deepspeed import HfDeepSpeedConfig
+from transformers.integrations.deepspeed import HfDeepSpeedConfig
 import deepspeed
-from deepspeed.ops.adam import DeepSpeedCPUAdam, FusedAdam
-from deepspeed.accelerator import get_accelerator
 
 
 def print_rank_0(msg, rank=0):

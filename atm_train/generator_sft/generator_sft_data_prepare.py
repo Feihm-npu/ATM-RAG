@@ -49,20 +49,28 @@ shuffle_config = {
 
 
 def process_data(example, ):
-    
+    dict_of_lists = {key: [d[key] for d in example["ctxs"]] for key in example["ctxs"][0]}
+    example["passages"] = {}
+    example["passages"]["is_selected"] = dict_of_lists["hasanswer"]
+    example["passages"]["passage_text"] = dict_of_lists["text"]
     raw_psgs = example['passages']['passage_text'][:10]
     selected = example['passages']['is_selected'][:10]
 
     assert len(raw_psgs) == len(selected)
     
+    # 确保 selected 中没有 None 值
+    if None in selected:
+        selected = [False if x is None else x for x in selected]
+    
     psgs = raw_psgs.copy()
     new_selected = selected.copy()
-    if random.uniform(0, 1) < 1 and psgs:
+    
+    if random.uniform(0, 1) < 1 and psgs is not None:
         psgs, new_selected = shuffler.shuffle_passage_list(psgs, new_selected)
 
-    question = example['query']
+    question = example['question']
 
-    gt_doc = raw_psgs[np.argmax(selected)] if selected else "None"
+    gt_doc = raw_psgs[np.argmax(selected)] if any(selected) else "None"
 
     raw_passages = "None"
     tar_passages = "None"
@@ -71,7 +79,7 @@ def process_data(example, ):
     raw_passages= "\n".join(raw_evidences)
     
 
-    if selected:
+    if any(selected):
         tar_psgs = [raw_psgs[np.argmax(selected)], ]
 
         for idx, one_psg in enumerate(raw_psgs):
@@ -89,7 +97,7 @@ def process_data(example, ):
         "doc_list": tar_passages,
         "gt_doc": gt_doc,
         "answer": example['answers'][0],
-        "gt_pos": np.argmax(new_selected) / len(new_selected) if new_selected else 0.
+        "gt_pos": np.argmax(new_selected) / len(new_selected) if any(new_selected) else 0.
     }
 
 
@@ -181,10 +189,10 @@ def process_str_to_input_ids(example):
     
 if __name__ == "__main__":
 
-    tokenizer = AutoTokenizer.from_pretrained(f'/path/to/input/pretrained_models/atm_7b')
+    tokenizer = AutoTokenizer.from_pretrained('mistralai/Mixtral-8x7B-Instruct-v0.1')
     shuffler = Shuffler(shuffle_config)    
 
-    ds = load_dataset('json', data_dir=f'/path/to/input/datasets/generator_sft', split='train') 
+    ds = load_dataset('json', data_files=f'/home/feihm/llm-fei/Data/ATM/test_data_with_fabs/NQ/NQ_fab.jsonl', split='train') 
 
     ds = ds.map(process_data, remove_columns=ds.column_names, num_proc=8)
 
@@ -194,5 +202,5 @@ if __name__ == "__main__":
 
     ds = ds.map(process_str_to_input_ids, remove_columns=ds.column_names, num_proc=8)
 
-    ds.save_to_disk(f'/path/to/input/datasets/attacked_train_fab_for_sft_arrows')
+    ds.save_to_disk(f'/home/feihm/llm-fei/Data/ATM/test_data_with_fabs/NQ/attacked_train_fab_for_sft_arrows')
     

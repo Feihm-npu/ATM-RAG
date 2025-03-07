@@ -7,7 +7,7 @@ import os
 import torch
 import transformers
 import numpy as np
-from accelerate import Accelerator
+from accelerate import Accelerator, infer_auto_device_map
 from dpo_utils import tokenize_row, DPOTrainer
 import argparse
 from transformers import (
@@ -80,9 +80,8 @@ def main():
     # parser = H4ArgumentParser((ModelArguments, DataArguments, SPINConfig))
     args = parse_args()
     accelerator = Accelerator()
-    
-    tokenizer = AutoTokenizer.from_pretrained(args.model_name_or_path)
-    tokenizer.pad_token = tokenizer.eos_token
+    tokenizer = AutoTokenizer.from_pretrained('Qwen/Qwen2.5-7B')
+    # tokenizer.pad_token = tokenizer.eos_token
 
     path = Path(args.train_data)
     if path.is_dir():
@@ -106,9 +105,11 @@ def main():
     )
 
     model = args.model_name_or_path
-
+    print(f'model {model}, model type {type(model)}')
     ref_model = model
     ref_model_kwargs = model_kwargs
+    # model = AutoModelForCausalLM.from_pretrained(args.model_name_or_path, **model_kwargs)
+    # ref_model = AutoModelForCausalLM.from_pretrained(args.model_name_or_path, **ref_model_kwargs)
 
 
     training_args = Seq2SeqTrainingArguments(
@@ -159,7 +160,7 @@ def main():
     ##################################
     # Save model and create model card
     ##################################
-    trainer.save_model(os.path.join(training_args.output_dir, 'model_final'))
+    trainer.save_model(os.path.join(training_args.output_dir, 'model_final_dpo'))
 
     accelerator.wait_for_everyone()
 
