@@ -1,45 +1,45 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-from datasets import load_dataset
+# 导入必要的库
+from datasets import load_dataset  # 用于加载和处理数据集
 import numpy as np
-from shuffle import Shuffler
+from shuffle import Shuffler  # 自定义的文档打乱工具
 import random
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer  # 用于文本标记化
 from pathlib import Path
 from matplotlib import pyplot as plt
-from prompting_for_rag import get_prompt_template, get_prompt
+from prompting_for_rag import get_prompt_template, get_prompt  # 导入提示模板
 import argparse
 
-
-
+# 定义不同任务的提示模板
 prompt_template = {
-    "deshuffle" : get_prompt_template("atm_deshuffle"),
-    "gt_doc" : get_prompt_template("atm_gt_doc"),
-    "rag_qa" : get_prompt_template("atm_instruct"),
-    "close_qa" : get_prompt_template("atm_instruct_close"),
-    "cot_deshuffle_qa" : [
+    "deshuffle": get_prompt_template("atm_deshuffle"),  # 用于重新排序打乱的文档
+    "gt_doc": get_prompt_template("atm_gt_doc"),  # 用于处理黄金文档
+    "rag_qa": get_prompt_template("atm_instruct"),  # 用于RAG问答
+    "close_qa": get_prompt_template("atm_instruct_close"),  # 用于封闭式问答
+    "cot_deshuffle_qa": [  # 思维链+重排序+问答
         get_prompt_template("atm_deshuffle"),
         get_prompt_template("atm_cot_qa_suffix")
     ],
-    "cot_gt_doc_qa" : [
+    "cot_gt_doc_qa": [  # 思维链+黄金文档+问答
         get_prompt_template("atm_gt_doc"),
         get_prompt_template("atm_cot_qa_suffix")
     ]
 }
 
+# 定义打乱配置，控制不同级别文本单元的打乱程度
 shuffle_config = {
     "paragraph": {
-        "shuffle_degree": 0., 
-        "drop_ratio": 0, 
-        "duplicate_ratio": 0.
+        "shuffle_degree": 0.,  # 打乱程度
+        "drop_ratio": 0,       # 丢弃比例
+        "duplicate_ratio": 0.  # 复制比例
     },
     "passage": {
         "shuffle_degree": 0., 
         "drop_ratio": 0., 
         "duplicate_ratio": 0.
     },
-    
     "sentence": {
         "shuffle_degree": 0., 
         "drop_ratio": 0., 
@@ -48,13 +48,22 @@ shuffle_config = {
 }
 
 
-def process_data(example, ):
+def process_data(example):
+    """
+    处理原始数据，提取相关字段并应用打乱操作
+    
+    参数:
+        example: 数据集中的一个样本
+    返回:
+        处理后的样本字典
+    """
+    # 从ctxs列表中提取字段
     dict_of_lists = {key: [d[key] for d in example["ctxs"]] for key in example["ctxs"][0]}
     example["passages"] = {}
-    example["passages"]["is_selected"] = dict_of_lists["hasanswer"]
-    example["passages"]["passage_text"] = dict_of_lists["text"]
-    raw_psgs = example['passages']['passage_text'][:10]
-    selected = example['passages']['is_selected'][:10]
+    example["passages"]["is_selected"] = dict_of_lists["hasanswer"]  # 标记哪些段落包含答案
+    example["passages"]["passage_text"] = dict_of_lists["text"]      # 段落文本
+    raw_psgs = example['passages']['passage_text'][:10]  # 取前10个段落
+    selected = example['passages']['is_selected'][:10]   # 对应的标记
 
     assert len(raw_psgs) == len(selected)
     
@@ -65,23 +74,27 @@ def process_data(example, ):
     psgs = raw_psgs.copy()
     new_selected = selected.copy()
     
+    # 以100%的概率打乱段落顺序
     if random.uniform(0, 1) < 1 and psgs is not None:
         psgs, new_selected = shuffler.shuffle_passage_list(psgs, new_selected)
 
     question = example['question']
 
+    # 获取黄金文档(包含答案的文档)
     gt_doc = raw_psgs[np.argmax(selected)] if any(selected) else "None"
 
     raw_passages = "None"
     tar_passages = "None"
 
+    # 格式化原始段落
     raw_evidences = ["[document] {} [/document]".format(ctx) for ctx in psgs]
-    raw_passages= "\n".join(raw_evidences)
+    raw_passages = "\n".join(raw_evidences)
     
-
+    # 构建目标段落集合(包含黄金文档和部分负样本)
     if any(selected):
-        tar_psgs = [raw_psgs[np.argmax(selected)], ]
+        tar_psgs = [raw_psgs[np.argmax(selected)], ]  # 首先添加黄金文档
 
+        # 以85%的概率排除非答案文档
         for idx, one_psg in enumerate(raw_psgs):
             if random.uniform(0, 1) > 0.15 and selected[idx] == 0:
                 tar_psgs.append(one_psg)
@@ -89,22 +102,30 @@ def process_data(example, ):
         tar_evidences = ["[document] {} [/document]".format(ctx) for ctx in tar_psgs]
         tar_passages = "\n".join(tar_evidences)
 
-    
-
+    # 返回处理后的样本
     return {
-        "paragraph": raw_passages, 
-        "question": question, 
-        "doc_list": tar_passages,
-        "gt_doc": gt_doc,
-        "answer": example['answers'][0],
-        "gt_pos": np.argmax(new_selected) / len(new_selected) if any(new_selected) else 0.
+        "paragraph": raw_passages,  # 原始段落
+        "question": question,       # 问题
+        "doc_list": tar_passages,   # 目标段落列表
+        "gt_doc": gt_doc,           # 黄金文档
+        "answer": example['answers'][0],  # 答案
+        "gt_pos": np.argmax(new_selected) / len(new_selected) if any(new_selected) else 0.  # 黄金文档的相对位置
     }
 
 
-
 def map_to_src_tgt(example):
+    """
+    将处理后的样本映射为源文本和目标文本对
+    
+    参数:
+        example: 处理后的样本
+    返回:
+        包含source和target的字典
+    """
     rnd = random.uniform(0, 1)
     mode = None
+    
+    # 注释掉的代码显示了更多样化的任务分配方式
     # if rnd < 0.05:
     #     mode = "close_qa"
     # elif rnd < 0.2:
@@ -118,17 +139,18 @@ def map_to_src_tgt(example):
     # else:
     #     mode = "gt_doc"
     
+    # 当前实现: 30%概率为close_qa任务，70%概率为rag_qa任务
     if rnd < 0.3:
         mode = "close_qa"
     else:
         mode = "rag_qa"
 
-
+    # 如果模式是top1_qa，使用黄金文档作为段落，并转为rag_qa模式
     if mode == 'top1_qa':
         example['paragraph'] = example['gt_doc']
         mode = 'rag_qa'
     
-
+    # 根据不同模式构建源文本和目标文本
     if mode == "deshuffle":
         return {
             "source": [prompt_template[mode].format_map(example)],
@@ -145,6 +167,7 @@ def map_to_src_tgt(example):
             "target": [example["gt_doc"]]
         }
     else:
+        # 处理多步骤提示(如思维链)
         srcs = []; tgts = []
         for sent in prompt_template[mode]:
             srcs.append(sent.format_map(example))
@@ -153,54 +176,69 @@ def map_to_src_tgt(example):
         elif mode == "cot_gt_doc_qa":
             tgts = [example["gt_doc"], example["answer"]]
 
-
         return {
             "source": srcs,
             "target": tgts
         }
 
 
-
 def process_str_to_input_ids(example):
-
+    """
+    将文本转换为模型输入的token ID
+    
+    参数:
+        example: 包含source和target的样本
+    返回:
+        包含input_ids和labels的字典
+    """
     input_ids = []; labels = []
     
+    # 处理每对源文本和目标文本
     for one_src, one_tgt in zip(example['source'], example['target']):
+        # 编码源文本，并将其标签设为-100(在计算损失时会被忽略)
         src_ids = tokenizer.encode(one_src)
         src_labels = [-100] * len(src_ids)
         
+        # 编码目标文本，保留其标签用于训练
         tgt_ids = tokenizer.encode(one_tgt, add_special_tokens=False)
         tgt_labels = tgt_ids.copy()
 
-        input_ids += src_ids + tgt_ids; labels += src_labels + tgt_labels
+        # 合并源文本和目标文本的token ID和标签
+        input_ids += src_ids + tgt_ids
+        labels += src_labels + tgt_labels
 
+        # 添加结束标记
         input_ids.append(tokenizer.eos_token_id)
         labels.append(tokenizer.eos_token_id)
 
-
-    input_ids = input_ids[:tokenizer.model_max_length - 1]; labels = labels[:tokenizer.model_max_length - 1]
+    # 截断到模型最大长度
+    input_ids = input_ids[:tokenizer.model_max_length - 1]
+    labels = labels[:tokenizer.model_max_length - 1]
+    
     return {
         "input_ids": input_ids,
         "labels": labels
     }
    
     
-
-    
 if __name__ == "__main__":
-
+    # 初始化tokenizer
     tokenizer = AutoTokenizer.from_pretrained('mistralai/Mixtral-8x7B-Instruct-v0.1')
+    # 初始化文档打乱器
     shuffler = Shuffler(shuffle_config)    
 
+    # 加载数据集
     ds = load_dataset('json', data_files=f'/home/feihm/llm-fei/Data/ATM/test_data_with_fabs/NQ/NQ_fab.jsonl', split='train') 
 
+    # 数据处理流程
+    # 1. 处理原始数据
     ds = ds.map(process_data, remove_columns=ds.column_names, num_proc=8)
 
-
+    # 2. 映射为源文本和目标文本
     ds = ds.map(map_to_src_tgt, remove_columns=ds.column_names, num_proc=8)
 
-
+    # 3. 转换为token ID
     ds = ds.map(process_str_to_input_ids, remove_columns=ds.column_names, num_proc=8)
 
+    # 保存处理后的数据集
     ds.save_to_disk(f'/home/feihm/llm-fei/Data/ATM/test_data_with_fabs/NQ/attacked_train_fab_for_sft_arrows')
-    

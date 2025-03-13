@@ -6,7 +6,8 @@ sh ~/llm-fei/FiD/get-data.sh
 ```bash
 sh ./build_test.sh
 ```
-
+It invokes the model to generate responses using prompts, e.g., the misleading answers for messages from the datasets.
+Then the *fab_merge.py* is invoked to combine the fake data from *ask_output* with the original jsonl file, into a new jsonl file.
 ## Initial tuning of Generator
 ```bash
 python ../atm_train/generator_sft/generator_sft_data_prepare.py
