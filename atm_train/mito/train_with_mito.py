@@ -99,9 +99,15 @@ def main():
     tokenizer.padding_side = 'left'
 
     raw_datasets = load_dataset('json', data_files=args.train_data, split='train')
-
+    # print("✅ Loaded dataset field names:", raw_datasets.column_names)
+    # print("✅ First sample:", raw_datasets[0])
     with accelerator.main_process_first():
-        raw_datasets = raw_datasets.map(mito_tokenize_row, fn_kwargs={'tokenizer': tokenizer}, num_proc=8)
+        raw_datasets = raw_datasets.map(
+    mito_tokenize_row,
+    fn_kwargs={'tokenizer': tokenizer, 'max_total_length': 2048},
+    num_proc=8,
+)
+        print(f'Preprocess completed!')
 
 
     print(raw_datasets)

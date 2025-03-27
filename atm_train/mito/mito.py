@@ -36,7 +36,7 @@ from trl.trainer.utils import (
     disable_dropout_in_model,
     pad_to_length,
     peft_module_casting_to_bf16,
-    trl_sanitze_kwargs_for_tagging,
+    # trl_sanitze_kwargs_for_tagging,
 )
 from dataclasses import dataclass
 
@@ -331,16 +331,8 @@ class MITOTrainer(DPOTrainer):
     def concatenated_forward(
         self, model: nn.Module, batch: Dict[str, Union[List, torch.LongTensor]]
     ) -> Tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
-        """Run the given model on the given batch of inputs, concatenating the chosen and rejected inputs together.
-
-        We do this to avoid doing two forward passes, because it's faster for FSDP.
-        """
         concatenated_batch = self.concatenated_inputs(
-            batch,
-            is_encoder_decoder=self.is_encoder_decoder,
-            label_pad_token_id=self.label_pad_token_id,
-            padding_value=self.padding_value,
-            device=self.accelerator.device,
+            batch, padding_value=self.padding_value
         )
         len_chosen = batch["chosen_labels"].shape[0]
 
@@ -362,19 +354,15 @@ class MITOTrainer(DPOTrainer):
         )
 
         all_logits = model_outputs.logits
-    
         vocab_size = all_logits.shape[-1]
         batch_size = all_logits.shape[0]
 
-        # Shift so that tokens < n predict n
         shift_logits = all_logits[..., :-1, :].contiguous()
         shift_labels = concatenated_batch["concatenated_labels"][..., 1:].contiguous()
-        # Flatten the tokens
 
         shift_logits = shift_logits.view(-1, vocab_size)
-        shift_labels = shift_labels.view(-1)
-        # Enable model parallelism
-        shift_labels = shift_labels.to(shift_logits.device)
+        shift_labels = shift_labels.view(-1).to(shift_logits.device)
+
         all_losses = self.ce_loss(shift_logits, shift_labels)
         all_losses = all_losses.view(batch_size, -1)
         all_losses = torch.sum(all_losses, dim=-1) / torch.sum((all_losses >= 1e-9).to(torch.long), dim=-1)
@@ -389,26 +377,94 @@ class MITOTrainer(DPOTrainer):
 
         chosen_logps = all_logps[:len_chosen]
         rejected_logps = all_logps[len_chosen:]
-
         chosen_logits = all_logits[:len_chosen]
         rejected_logits = all_logits[len_chosen:]
-
         chosen_loss = all_losses[:len_chosen]
         rejected_loss = all_losses[len_chosen:]
 
         model_loss = model_outputs.loss
+        del model_outputs, concatenated_batch, batch
+        torch.cuda.empty_cache()
+
         return (chosen_logps, rejected_logps, chosen_logits, rejected_logits, chosen_loss, rejected_loss, model_loss)
 
+    def get_batch_logps(
+    self,
+    logits: torch.FloatTensor,
+    labels: torch.LongTensor,
+    average_log_prob: bool = False,
+    is_encoder_decoder: bool = False,
+    label_pad_token_id: int = -100,
+) -> torch.FloatTensor:
+        """
+        计算 batch 中每个样本的 log-likelihood 总和或平均值。
 
-    def get_batch_loss_metrics(
-        self,
-        model,
-        batch: Dict[str, Union[List, torch.LongTensor]],
-        train_eval: Literal["train", "eval"] = "train",
-    ):
-        """Compute the DPO loss and other metrics for the given batch of inputs for train or test."""
+        Args:
+            logits: (batch_size, seq_len, vocab_size)
+            labels: (batch_size, seq_len)
+            average_log_prob: 是否对每个 sample 的 logprob 取平均，否则是 sum
+            is_encoder_decoder: 用于确定是否处理 encoder-decoder 架构
+            label_pad_token_id: 用于 mask 的 pad token
+
+        Returns:
+            log_probs: (batch_size,) 每个 sample 的对数概率
+        """
+        # shift for causal lm
+        if not is_encoder_decoder:
+            logits = logits[:, :-1]
+            labels = labels[:, 1:]
+
+        # flatten for log_softmax
+        log_probs = torch.nn.functional.log_softmax(logits, dim=-1)
+        vocab_size = logits.size(-1)
+
+        # 获取 labels 的概率
+        labels = labels.to(logits.device)
+        label_mask = labels != label_pad_token_id
+
+        # 将 labels 编码成 one-hot，得到每个位置的 log_p(label)
+        labels_one_hot = torch.nn.functional.one_hot(labels * label_mask, num_classes=vocab_size).bool()
+        log_p = log_probs[labels_one_hot].view(logits.size(0), -1)
+
+        # 对每个 sample 求和或平均
+        if average_log_prob:
+            log_p = log_p.sum(dim=1) / label_mask.sum(dim=1)
+        else:
+            log_p = log_p.sum(dim=1)
+
+        return log_p
+
+
+    def concatenated_inputs(
+    self,
+    batch: Dict[str, Union[List, torch.LongTensor]],
+    padding_value: int = 0,
+) -> Dict[str, torch.Tensor]:
+        """
+        Concatenates chosen and rejected inputs into a single batch for MITO training.
+        """
+        # 1. Extract tensors
+        chosen_input_ids = batch["chosen_input_ids"]
+        rejected_input_ids = batch["rejected_input_ids"]
+        chosen_attention_mask = batch["chosen_attention_mask"]
+        rejected_attention_mask = batch["rejected_attention_mask"]
+        chosen_labels = batch["chosen_labels"]
+        rejected_labels = batch["rejected_labels"]
+
+        # 2. Concatenate along batch dim
+        concatenated_input_ids = torch.cat([chosen_input_ids, rejected_input_ids], dim=0)
+        concatenated_attention_mask = torch.cat([chosen_attention_mask, rejected_attention_mask], dim=0)
+        concatenated_labels = torch.cat([chosen_labels, rejected_labels], dim=0)
+
+        return {
+            "concatenated_input_ids": concatenated_input_ids,
+            "concatenated_attention_mask": concatenated_attention_mask,
+            "concatenated_labels": concatenated_labels,
+        }
+
+
+    def get_batch_loss_metrics(self, model, batch, train_eval: Literal["train", "eval"] = "train"):
         metrics = {}
-
         (
             policy_chosen_logps,
             policy_rejected_logps,
@@ -419,207 +475,113 @@ class MITOTrainer(DPOTrainer):
             policy_model_loss,
         ) = self.concatenated_forward(model, batch)
 
-        # if reference_chosen_logps and reference_rejected_logps in batch use them, otherwise use the reference model
-        if "reference_chosen_logps" in batch and "reference_rejected_logps" in batch:
-            reference_chosen_logps = batch["reference_chosen_logps"]
-            reference_rejected_logps = batch["reference_rejected_logps"]
-        else:
-            with torch.no_grad():
-                if self.ref_model is None:
-                    with self.null_ref_context():
-                        (
-                            reference_chosen_logps,
-                            reference_rejected_logps,
-                            reference_chosen_logits,
-                            reference_rejected_logits,
-                            _,
-                            _,
-                            _,
-                        ) = self.concatenated_forward(self.model, batch)
-                else:
+        with torch.no_grad():
+            if "reference_chosen_logps" in batch and "reference_rejected_logps" in batch:
+                ref_chosen_logps = batch["reference_chosen_logps"]
+                ref_rejected_logps = batch["reference_rejected_logps"]
+                ref_chosen_logits = ref_rejected_logits = None
+            elif self.ref_model is None:
+                with self.null_ref_context():
                     (
-                        reference_chosen_logps,
-                        reference_rejected_logps,
-                        reference_chosen_logits,
-                        reference_rejected_logits,
-                        _,
-                        _,
-                        _,
-                    ) = self.concatenated_forward(self.ref_model, batch)
+                        ref_chosen_logps,
+                        ref_rejected_logps,
+                        ref_chosen_logits,
+                        ref_rejected_logits,
+                        _, _, _
+                    ) = self.concatenated_forward(self.model, batch)
+            else:
+                (
+                    ref_chosen_logps,
+                    ref_rejected_logps,
+                    ref_chosen_logits,
+                    ref_rejected_logits,
+                    _, _, _
+                ) = self.concatenated_forward(self.ref_model, batch)
 
-        # adversarial
+        pol_kl_loss = self.mito_loss(policy_chosen_logits, policy_rejected_logits, batch['chosen_labels'], batch['rejected_labels'])
 
-        chosen_sft_losses = policy_chosen_loss
+        if ref_chosen_logits is not None and ref_rejected_logits is not None:
+            ref_kl_loss = self.mito_loss(ref_chosen_logits, ref_rejected_logits, batch['chosen_labels'], batch['rejected_labels'])
+        else:
+            ref_kl_loss = torch.tensor(0.0, device=policy_chosen_loss.device)
 
-        rejected_sft_losses = policy_rejected_loss
-
-        pol_kl_losses = self.mito_loss(
-            # policy_chosen_logits,
-            policy_chosen_logits,
-            policy_rejected_logits,
-            batch['chosen_labels'],
-            batch['rejected_labels']
-            # reference_rejected_logits,
-        )
-
-        ref_kl_losses = self.mito_loss(
-            # policy_chosen_logits,
-            reference_chosen_logits,
-            reference_rejected_logits,
-            batch['chosen_labels'],
-            batch['rejected_labels']
-            # reference_rejected_logits,
-        )
-        
-        # losses = kl_losses + policy_chosen_loss + policy_rejected_loss
-        losses =  policy_chosen_loss + self.beta * (pol_kl_losses - ref_kl_losses)
-
-        # rejected_diff = policy_rejected_logps - reference_chosen_logps
-        # chosen_logps_diff_loss =  - F.logsigmoid(chosen_diff)
-        # losses = chosen_logps_diff_loss / chosen_logps_diff_loss.detach() + kl_losses / kl_losses.detach()
-        # losses = kl_losses +  chosen_logps_diff_loss
-        # reward_accuracies = (chosen_rewards > rejected_rewards).float()
+        losses = policy_chosen_loss + self.beta * (pol_kl_loss - ref_kl_loss.detach())
 
         prefix = "eval_" if train_eval == "eval" else ""
-        # metrics[f"{prefix}rewards/chosen"] = chosen_rewards.mean().cpu()
-        # metrics[f"{prefix}rewards/rejected"] = rejected_rewards.mean().cpu()
-        # metrics[f"{prefix}rewards/accuracies"] = reward_accuracies.mean().cpu()
-        # metrics[f"{prefix}rewards/margins"] = (chosen_rewards - rejected_rewards).mean().cpu()
-
-        metrics[f"{prefix}logits/pol_diff"] = policy_chosen_logits.detach().mean().cpu() - policy_rejected_logits.detach().mean().cpu()
-        metrics[f"{prefix}logits/ref_diff"] = reference_chosen_logits.detach().mean().cpu() - reference_rejected_logits.detach().mean().cpu()
-
-        metrics[f"{prefix}logps/pol_diff"] = policy_chosen_logps.detach().mean().cpu() - policy_rejected_logps.detach().mean().cpu()
-        metrics[f"{prefix}logps/ref_diff"] = reference_chosen_logps.detach().mean().cpu() - reference_rejected_logps.detach().mean().cpu()
-
-
-        metrics[f"{prefix}logps/pol_rejected"] = policy_rejected_logps.detach().mean().cpu()
-        metrics[f"{prefix}logps/pol_chosen"] = policy_chosen_logps.detach().mean().cpu()
-        metrics[f"{prefix}logps/ref_rejected"] = reference_rejected_logps.detach().mean().cpu()
-        metrics[f"{prefix}logps/ref_chosen"] = reference_chosen_logps.detach().mean().cpu()
-
-        metrics[f"{prefix}logits/pol_rejected"] = policy_rejected_logits.detach().mean().cpu()
-        metrics[f"{prefix}logits/pol_chosen"] = policy_chosen_logits.detach().mean().cpu()
-        metrics[f"{prefix}logits/ref_rejected"] = reference_rejected_logits.detach().mean().cpu()
-        metrics[f"{prefix}logits/ref_chosen"] = reference_chosen_logits.detach().mean().cpu()
-        
-        metrics[f"{prefix}sft_loss/pol_chosen"] = policy_chosen_loss.detach().mean().cpu()
-        metrics[f"{prefix}sft_loss/pol_rejected"] = policy_rejected_loss.detach().mean().cpu()
+        metrics[f"{prefix}sft_loss/pol_chosen"] = policy_chosen_loss.mean().detach().cpu()
+        metrics[f"{prefix}sft_loss/pol_rejected"] = policy_rejected_loss.mean().detach().cpu()
 
         return losses.mean(), metrics
 
 
-    def mito_loss(
-            self,
-            # policy_chosen_logits,
-            pred_logits,
-            target_logits,
-            pred_labels,
-            target_labels,
-        ) -> Tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
+    def mito_loss(self, pred_logits, target_logits, pred_labels, target_labels):
+        pred_logits = pred_logits.masked_fill((pred_labels == -100).unsqueeze(-1), torch.finfo(pred_logits.dtype).min)
+        target_logits = target_logits.masked_fill((target_labels == -100).unsqueeze(-1), torch.finfo(target_logits.dtype).min)
 
-        pred_logits = pred_logits.masked_fill(
-            (pred_labels == -100).unsqueeze(-1), torch.finfo(pred_logits.dtype).min
-        )
+        tar_prob = F.softmax(target_logits.flatten(0, 1), dim=1)
+        pred_prob = F.log_softmax(pred_logits.flatten(0, 1), dim=1)
 
-        target_logits = target_logits.masked_fill(
-            (target_labels == -100).unsqueeze(-1), torch.finfo(target_logits.dtype).min
-        )
-
-
-        tar_prob = target_logits.view(-1, target_logits.shape[-1]).contiguous()
-        pred_prob = pred_logits.view(-1, pred_logits.shape[-1]).contiguous()
-        
-        tar_prob = F.softmax(tar_prob, dim=1)
-        pred_prob = F.log_softmax(pred_prob, dim=1)
-        
         kl_loss = self.kldiv_loss(pred_prob, tar_prob)
-        
         return kl_loss
         
 
-def mito_tokenize_row(feature, tokenizer) -> Dict:
-    """Tokenize a single row from a DPO specific dataset.
-
-    At this stage, we don't convert to PyTorch tensors yet; we just handle the truncation
-    in case the prompt + chosen or prompt + rejected responses is/are too long. First
-        we truncate the prompt; if we're still too long, we truncate the chosen/rejected.
-
-    We also create the labels for the chosen/rejected responses, which are of length equal to
-        the sum of the length of the prompt and the chosen/rejected response, with
-        label_pad_token_id  for the prompt tokens.
+def mito_tokenize_row(feature, tokenizer, max_total_length=4096) -> Dict:
     """
-    batch = {}
-    adv_prompt = feature["adv_prompt"]
+    Tokenize and truncate a single data point for MITO training.
+
+    This version enforces truncation after prompt+answer concatenation,
+    ensuring the total length is within `max_total_length`.
+    """
+    label_pad_token_id = -100
     prompt = feature["prompt"]
+    adv_prompt = feature["adv_prompt"]
     answer = feature["answer"]
 
-    label_pad_token_id = -100
+    if not isinstance(prompt, str) or not isinstance(adv_prompt, str) or not isinstance(answer, str):
+        raise ValueError("All of prompt, adv_prompt, and answer must be strings.")
 
+    assert tokenizer.padding_side == "left"
 
-    if not isinstance(prompt, str):
-        raise ValueError(f"prompt should be an str but got {type(prompt)}")
+    # Encode prompts (no special tokens)
+    prompt_encs = tokenizer([prompt, adv_prompt], add_special_tokens=False)
+    # Encode answer (also no special tokens)
+    answer_enc = tokenizer(answer, add_special_tokens=False)
+    answer_input_ids = answer_enc["input_ids"] + [tokenizer.eos_token_id]
+    answer_attention_mask = answer_enc["attention_mask"] + [1]
 
-    assert tokenizer.padding_side == 'left'
+    def truncate_and_build(prompt_ids, prompt_mask):
+        input_ids = prompt_ids + answer_input_ids
+        attention_mask = prompt_mask + answer_attention_mask
 
-    prompt_encs = tokenizer([prompt, adv_prompt], padding=True, add_special_tokens=False)
-    answer_encs = tokenizer(answer, add_special_tokens=False)
+        # Truncate from the left if too long
+        if len(input_ids) > max_total_length:
+            overflow = len(input_ids) - max_total_length
+            input_ids = input_ids[overflow:]
+            attention_mask = attention_mask[overflow:]
+            prompt_len = max(len(prompt_ids) - overflow, 0)
+        else:
+            prompt_len = len(prompt_ids)
 
-    if not isinstance(answer, str):
-        raise ValueError(f"answer should be an str but got {type(chosen)}")
+        labels = input_ids[:]
+        labels[:prompt_len] = [label_pad_token_id] * prompt_len
+        return input_ids, attention_mask, labels
 
+    chosen_input_ids, chosen_attention_mask, chosen_labels = truncate_and_build(
+        prompt_encs["input_ids"][0], prompt_encs["attention_mask"][0]
+    )
+    rejected_input_ids, rejected_attention_mask, rejected_labels = truncate_and_build(
+        prompt_encs["input_ids"][1], prompt_encs["attention_mask"][1]
+    )
 
-    chosen_tokens = {}
-    rejected_tokens = {}
-
-    chosen_tokens["prompt_input_ids"] = prompt_encs["input_ids"][0]
-    rejected_tokens["prompt_input_ids"] = prompt_encs["input_ids"][1]
-
-    chosen_tokens["prompt_attention_mask"] = prompt_encs["attention_mask"][0]
-    rejected_tokens["prompt_attention_mask"] = prompt_encs["attention_mask"][1]
-
-    # chosen_tokens["input_ids"] = chosen_tokens["prompt_input_ids"] + answer_encs['input_ids']
-    # rejected_tokens["input_ids"] = rejected_tokens["prompt_input_ids"] + answer_encs['input_ids']
-
-    # chosen_tokens["attention_mask"] = chosen_tokens["prompt_attention_mask"] + answer_encs['attention_mask']
-    # rejected_tokens["attention_mask"] = rejected_tokens["prompt_attention_mask"] + answer_encs['attention_mask']
-
-
-    answer_encs["input_ids"].append(tokenizer.eos_token_id)
-    answer_encs["attention_mask"].append(1)
-
-    # Create labels
-    chosen_sequence_tokens = {
-        k: chosen_tokens[f"prompt_{k}"] + answer_encs[k] for k in ["input_ids", "attention_mask"]
+    return {
+        "chosen_input_ids": chosen_input_ids,
+        "chosen_attention_mask": chosen_attention_mask,
+        "chosen_labels": chosen_labels,
+        "rejected_input_ids": rejected_input_ids,
+        "rejected_attention_mask": rejected_attention_mask,
+        "rejected_labels": rejected_labels,
     }
-    rejected_sequence_tokens = {
-        k: rejected_tokens[f"prompt_{k}"] + answer_encs[k] for k in ["input_ids", "attention_mask"]
-    }
 
-    chosen_sequence_tokens["labels"] = chosen_sequence_tokens["input_ids"][:]
-
-    assert len(chosen_tokens["prompt_input_ids"]) == len(rejected_tokens["prompt_input_ids"])
-    
-    chosen_sequence_tokens["labels"][: len(chosen_tokens["prompt_input_ids"])] = [
-        label_pad_token_id
-    ] * len(chosen_tokens["prompt_input_ids"])
-
-    rejected_sequence_tokens["labels"] = rejected_sequence_tokens["input_ids"][:]
-    rejected_sequence_tokens["labels"][: len(rejected_tokens["prompt_input_ids"])] = [
-        label_pad_token_id
-    ] * len(rejected_tokens["prompt_input_ids"])
-
-
-    for k, toks in {
-        "chosen_": chosen_sequence_tokens,
-        "rejected_": rejected_sequence_tokens,
-    }.items():
-        for type_key, tokens in toks.items():
-            if type_key == "token_type_ids":
-                continue
-            batch[f"{k}{type_key}"] = tokens
-
-    return batch
 
 
     
