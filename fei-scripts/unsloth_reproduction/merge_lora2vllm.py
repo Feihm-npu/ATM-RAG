@@ -3,8 +3,8 @@ from transformers import AutoTokenizer
 from unsloth import FastLanguageModel
 # Step 1: 加载 base 模型
 base_model_name = "unsloth/Qwen2.5-7B"
-adapter_dir = "/home/feihm/llm-fei/ATM-RAG/fei-scripts/unsloth_reproduction/s2_experiments/model_1epoch_dpo"
-output_dir = "/home/feihm/llm-fei/ATM-RAG/fei-scripts/unsloth_reproduction/s2_experiments/merged_for_vllm_final"
+adapter_dir = "/home/feihm/llm-fei/ATM-RAG/fei-scripts/unsloth_reproduction/s1_experiments/model_final"
+output_dir = "/home/feihm/llm-fei/ATM-RAG/fei-scripts/unsloth_reproduction/s1_experiments/for_vllm"
 
 model, tokenizer = FastLanguageModel.from_pretrained(
     model_name = base_model_name,

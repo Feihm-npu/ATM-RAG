@@ -4,8 +4,8 @@ export CUDA_VISIBLE_DEVICES=0  # vLLM 通常需要 CUDA 变量
 
 epoch=1
 
-mkdir -p /home/feihm/llm-fei/Data/ATM/test_data_with_fabs1
-mkdir -p /home/feihm/llm-fei/Data/ATM/test_data_with_fabs/ask_output1
+mkdir -p /home/feihm/llm-fei/Data/ATM/test_data_with_fabs1/NQ
+mkdir -p /home/feihm/llm-fei/Data/ATM/test_data_with_fabs/ask_output1/NQ
 
 echo "First part started!"
 OMP_NUM_THREADS=64 PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True python /home/feihm/llm-fei/ATM-RAG/atm_train/attacker_build_data/build_ask_gpt.py \
