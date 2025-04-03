@@ -55,13 +55,13 @@ if __name__ == '__main__':
     
     ds_name = args.ds_name
     
-    ds = load_dataset('json', data_files='/home/feihm/llm-fei/Data/ATM/test_data_with_fabs/NQ/NQ_fab.jsonl', split='train')
+    ds = load_dataset('json', data_files=ds_name, split='train')
 
     ds = ds.map(format_row, num_proc=8, remove_columns=ds.column_names)
     
 
-    sdf = pd.read_csv(args.input_score).values
-    tdf = pd.read_csv(args.input_docs).values
+    sdf = pd.read_csv(f'{args.input_score}').values
+    tdf = pd.read_csv(f'{args.input_docs}').values
     
     min_max = get_minmax(sdf)
     
@@ -74,4 +74,4 @@ if __name__ == '__main__':
 
     ds = Dataset.from_dict(ds)
     
-    ds.to_json(args.output)
+    ds.to_json(f'{args.output}')

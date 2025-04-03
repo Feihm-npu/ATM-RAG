@@ -104,10 +104,10 @@ def main():
 
     trainer.train()
     # trainer.save_model(os.path.join(args.output_dir, "model_final"))
-    model.save_pretrained(os.path.join(args.output_dir, "model_final"))
+    model.save_pretrained(args.output_dir)
 
 # 保存 tokenizer（否则下一次 tokenizer 也加载不了）
-    tokenizer.save_pretrained(os.path.join(args.output_dir, "model_final"))
+    tokenizer.save_pretrained(args.output_dir)
     wandb.finish()
 
 if __name__ == "__main__":

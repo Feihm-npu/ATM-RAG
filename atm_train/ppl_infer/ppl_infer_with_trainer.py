@@ -128,7 +128,7 @@ def main():
     
     preds = preds.predictions[:ds.num_rows].reshape((-1, args.num_dups))
     odf = pd.DataFrame(preds, columns=[f'output_{idx}' for idx in range(args.num_dups)])
-    odf.to_csv(args.output, index=False)
+    odf.to_csv(f'{args.output}', index=False)
 
 if __name__ == "__main__":
     NUM_DUPS = 5

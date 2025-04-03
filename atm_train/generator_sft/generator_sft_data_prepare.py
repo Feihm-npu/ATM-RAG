@@ -8,23 +8,23 @@ from shuffle import Shuffler  # 自定义的文档打乱工具
 import random
 from transformers import AutoTokenizer  # 用于文本标记化
 from pathlib import Path
-from matplotlib import pyplot as plt
-from prompting_for_rag import get_prompt_template, get_prompt  # 导入提示模板
 import argparse
+
+
 
 # 定义不同任务的提示模板
 prompt_template = {
-    "deshuffle": get_prompt_template("atm_deshuffle"),  # 用于重新排序打乱的文档
-    "gt_doc": get_prompt_template("atm_gt_doc"),  # 用于处理黄金文档
-    "rag_qa": get_prompt_template("atm_instruct"),  # 用于RAG问答
-    "close_qa": get_prompt_template("atm_instruct_close"),  # 用于封闭式问答
+    "deshuffle": "atm_deshuffle",  # 用于重新排序打乱的文档
+    "gt_doc": "atm_gt_doc",  # 用于处理黄金文档
+    "rag_qa": "atm_instruct",  # 用于RAG问答
+    "close_qa": "atm_instruct_close",  # 用于封闭式问答
     "cot_deshuffle_qa": [  # 思维链+重排序+问答
-        get_prompt_template("atm_deshuffle"),
-        get_prompt_template("atm_cot_qa_suffix")
+        "atm_deshuffle",
+        "atm_cot_qa_suffix"
     ],
     "cot_gt_doc_qa": [  # 思维链+黄金文档+问答
-        get_prompt_template("atm_gt_doc"),
-        get_prompt_template("atm_cot_qa_suffix")
+        "atm_gt_doc",
+        "atm_cot_qa_suffix"
     ]
 }
 
@@ -47,6 +47,12 @@ shuffle_config = {
     }
 }
 
+shuffler = Shuffler(shuffle_config) 
+
+from prompting_for_rag import get_prompt_template, get_prompt  # 导入提示模板
+
+# 定义示例格式，用于构建提示
+example_format = 'TITLE {title} # TEXT {text}'
 
 def process_data(example):
     """
@@ -125,20 +131,6 @@ def map_to_src_tgt(example):
     rnd = random.uniform(0, 1)
     mode = None
     
-    # 注释掉的代码显示了更多样化的任务分配方式
-    # if rnd < 0.05:
-    #     mode = "close_qa"
-    # elif rnd < 0.2:
-    #     mode = "deshuffle"
-    # elif rnd < 0.3:
-    #     mode = "cot_deshuffle_qa"
-    # elif rnd < 0.45:
-    #     mode = "cot_gt_doc_qa"
-    # elif rnd < 0.8:
-    #     mode = "rag_qa"
-    # else:
-    #     mode = "gt_doc"
-    
     # 当前实现: 30%概率为close_qa任务，70%概率为rag_qa任务
     if rnd < 0.3:
         mode = "close_qa"
@@ -182,12 +174,13 @@ def map_to_src_tgt(example):
         }
 
 
-def process_str_to_input_ids(example):
+def process_str_to_input_ids(example, tokenizer):
     """
     将文本转换为模型输入的token ID
     
     参数:
         example: 包含source和target的样本
+        tokenizer: 用于文本编码的tokenizer
     返回:
         包含input_ids和labels的字典
     """
@@ -219,16 +212,23 @@ def process_str_to_input_ids(example):
         "input_ids": input_ids,
         "labels": labels
     }
-   
+
+def main():
+    # 解析命令行参数
+    parser = argparse.ArgumentParser(description='Process dataset for RAG tasks')
+    parser.add_argument('--model_path', type=str, required=True, help='Path to the model')
+    parser.add_argument('--data_path', type=str, required=True, help='Path to the input data file')
+    parser.add_argument('--dst_path', type=str, required=True, help='Destination path to save processed data')
     
-if __name__ == "__main__":
+    args = parser.parse_args()
+
     # 初始化tokenizer
-    tokenizer = AutoTokenizer.from_pretrained('mistralai/Mixtral-8x7B-Instruct-v0.1')
+    tokenizer = AutoTokenizer.from_pretrained(args.model_path)
     # 初始化文档打乱器
     shuffler = Shuffler(shuffle_config)    
 
     # 加载数据集
-    ds = load_dataset('json', data_files=f'/home/feihm/llm-fei/Data/ATM/test_data_with_fabs/NQ/NQ_fab.jsonl', split='train') 
+    ds = load_dataset('json', data_files=args.data_path, split='train') 
 
     # 数据处理流程
     # 1. 处理原始数据
@@ -237,8 +237,13 @@ if __name__ == "__main__":
     # 2. 映射为源文本和目标文本
     ds = ds.map(map_to_src_tgt, remove_columns=ds.column_names, num_proc=8)
 
-    # 3. 转换为token ID
-    ds = ds.map(process_str_to_input_ids, remove_columns=ds.column_names, num_proc=8)
+    # 3. 转换为token ID，需要传递tokenizer
+    ds = ds.map(lambda x: process_str_to_input_ids(x, tokenizer), remove_columns=ds.column_names, num_proc=8, desc="Converting to input IDs")
 
     # 保存处理后的数据集
-    ds.save_to_disk(f'/home/feihm/llm-fei/Data/ATM/test_data_with_fabs/NQ/attacked_train_fab_for_sft_arrows')
+    ds.save_to_disk(args.dst_path)
+
+    print(f"[✓] Processed dataset saved to: {args.dst_path}")
+
+if __name__ == "__main__":
+    main()

@@ -49,10 +49,10 @@ def pre_replace_seps(output):
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--ds_name", default='nq-test', type=str)
+    parser.add_argument("--fab-path", default='nq-test', type=str)
     parser.add_argument("--num_dups", default=5, type=int)
     parser.add_argument("--epoch_suffix", default=0, type=int)
-    parser.add_argument("--dest_dir", required=True, type=str)
+    parser.add_argument("--dest-dir", required=True, type=str)
     args = parser.parse_args()
     return args
 
@@ -60,8 +60,8 @@ if __name__ == '__main__':
     args = parse_args()
 
     ds_name = args.ds_name
-    fab_file_path = f'/home/feihm/llm-fei/Data/ATM/test_data_with_fabs/ask_output/{ds_name}_fab.csv'
-    ds_source_path = f'/home/feihm/llm-fei/Data/{ds_name}.jsonl'
+    fab_file_path = f'{args.fab_path}'
+    ds_source_path = f'{args.dest_dir}'
 
     dest_path = Path(args.dest_dir)
     dest_path.mkdir(parents=True, exist_ok=True)
@@ -113,7 +113,7 @@ if __name__ == '__main__':
         item['answer'] = answer
 
     final_dataset = Dataset.from_list(rds)
-    output_path = (dest_path / f'{ds_name}_fab.jsonl').resolve()
+    output_path = dest_path
     final_dataset.to_json(str(output_path))
 
     print(f"✅ Saved MITO-formatted dataset to: {output_path}")

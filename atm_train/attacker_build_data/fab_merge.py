@@ -66,7 +66,8 @@ def pre_replace_seps(output):
 # 解析命令行参数
 def parse_args():
     parser = argparse.ArgumentParser(description="Finetune a transformers model on a causal language modeling task")
-    parser.add_argument("--ds_name", default='nq-test', type=str)  # 数据集名称
+    parser.add_argument("--ds_path", default='nq-test', type=str)  # 数据集名称
+    parser.add_argument("--fab_path", default='NQ_fab', type=str)  # FAB 文件路径
     parser.add_argument("--num_dups", default=5, type=int)  # 重复次数
     parser.add_argument("--epoch_suffix", default=0, type=int)  # 训练轮次后缀
     parser.add_argument("--dest_dir", required=True, type=str)  # 输出目录
@@ -76,13 +77,16 @@ def parse_args():
 if __name__ == '__main__':
     args = parse_args()  # 解析参数
 
-    ds_name = args.ds_name  # 获取数据集名称
-    fab_file_path = f'/home/feihm/llm-fei/Data/ATM/test_data_with_fabs/ask_output/{ds_name}_fab.csv'  # CSV 数据路径
-    ds_source_path = f'/home/feihm/llm-fei/Data/{ds_name}.jsonl'  # 原始 JSONL 数据集路径
+    ds_path = args.ds_path  # 获取数据集名称
+    fab_path = args.fab_path
+    dest_path = args.dest_dir  # 输出目录
+
+    fab_file_path = f'{fab_path}'  # CSV 数据路径
+    ds_source_path = f'{ds_path}'  # 原始 JSONL 数据集路径
     
-    dest_path = Path(f'/home/feihm/llm-fei/Data/ATM/test_data_with_fabs')  # 目标路径
-    if not dest_path.exists():
-        dest_path.mkdir()  # 如果路径不存在，则创建
+    # dest_path = Path(f'/home/feihm/llm-fei/Data/ATM/test_data_with_fabs')  # 目标路径
+    # if not dest_path.exists():
+    #     dest_path.mkdir()  # 如果路径不存在，则创建
     
     fab_df = pd.read_csv(fab_file_path)  # 读取 CSV 文件
     fab_df = fab_df.fillna(fab_df['output_0'].iloc[0])  # 处理缺失值，填充为第一个 'output_0' 的值
@@ -91,7 +95,7 @@ if __name__ == '__main__':
     
     nads = []  # 存储新的数据集
     for idx in range(args.num_dups):
-        outputs = fab_df[f'output_{idx}'].tolist()  # 获取当前 'output' 列数据
+        outputs = fab_df[f'output_{idx}'].astype(str).tolist()  # 获取当前 'output' 列数据
         ads = Dataset.from_dict({'output': outputs})  # 转换为 Dataset 格式
         nads.append(ads.map(extract_feat, num_proc=8, remove_columns=ads.column_names))  # 并行处理并去掉旧列
     
@@ -110,4 +114,4 @@ if __name__ == '__main__':
             rds[idx]['ctxs'].insert(0, insert_item)  # 插入新内容
     
     rds = Dataset.from_list(rds)  # 转换回 Dataset
-    rds.to_json((dest_path / f'{ds_name}_fab.jsonl').resolve())  # 保存为 JSONL 文件
+    rds.to_json(f'{dest_path}')  # 保存为 JSONL 文件
