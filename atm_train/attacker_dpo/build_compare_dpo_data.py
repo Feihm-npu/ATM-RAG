@@ -1,5 +1,5 @@
 import pandas as pd
-from datasets import load_dataset, Dataset
+from datasets import load_dataset, Dataset, Features, Value
 import argparse
 import numpy as np
 from pathlib import Path
@@ -7,7 +7,7 @@ from prompting_for_rag import get_prompt
 
 example_format = 'TITLE {title} # TEXT {text}'
 NUM_DUPS = 5
-# NUM_DUPS = 10
+
 def format_row(example):
     item = {}
     try:
@@ -23,7 +23,6 @@ def format_row(example):
 
     return {'prompt': get_prompt('atm_data_attacker', item)}
 
-
 def get_minmax(scores):
     assert scores.shape[1] == NUM_DUPS
     
@@ -35,7 +34,6 @@ def get_minmax(scores):
         "min": min_value,
     }
     
-    
 def parse_args():
     parser = argparse.ArgumentParser(description="Finetune a transformers model on a causal language modeling task")
     parser.add_argument("--input_score", type=str)
@@ -44,7 +42,6 @@ def parse_args():
     parser.add_argument("--ds_name", default='nq-train', type=str)
 
     parser.add_argument("--output", required=True, type=str)
-    
     
     args = parser.parse_args()
     return args
@@ -60,18 +57,42 @@ if __name__ == '__main__':
     ds = ds.map(format_row, num_proc=8, remove_columns=ds.column_names)
     
 
-    sdf = pd.read_csv(f'{args.input_score}').values
-    tdf = pd.read_csv(f'{args.input_docs}').values
-    
+    # Read and clean score CSV, replacing None/NaN with 2
+    score_df = pd.read_csv(args.input_score)
+    score_df = score_df.fillna(2)  # Replace NaN with 2
+    score_df = score_df.replace([None, 'None', np.nan], 2)  # Replace None or 'None' strings with 2
+    sdf = score_df.values.astype(float)  # Convert to float for argmax/argmin
+
+    # Read docs CSV as strings
+    docs_df = pd.read_csv(args.input_docs).astype(str)  # Ensure all are strings
+    tdf = docs_df.values
+
     min_max = get_minmax(sdf)
     
+    # Ensure chosen and rejected are strings
     chosen = tdf[np.arange(tdf.shape[0]), min_max['max']].tolist()
     rejected = tdf[np.arange(tdf.shape[0]), min_max['min']].tolist()
 
-    ds = ds.to_dict()
-    ds['chosen'] = chosen
-    ds['rejected'] = rejected
+    # Convert to strings explicitly
+    chosen = [str(x) for x in chosen]
+    rejected = [str(x) for x in rejected]
 
-    ds = Dataset.from_dict(ds)
+    # Convert dataset to dict
+    ds_dict = ds.to_dict()
+
+    # Add chosen and rejected
+    ds_dict['chosen'] = chosen
+    ds_dict['rejected'] = rejected
+
+    # Define features to ensure all fields are strings
+    features = Features({
+        'prompt': Value('string'),  # Existing field
+        'chosen': Value('string'),  # New field
+        'rejected': Value('string') # New field
+    })
+
+    # Create dataset with explicit features
+    ds = Dataset.from_dict(ds_dict, features=features)
     
-    ds.to_json(f'{args.output}')
+    # Save to JSON
+    ds.to_json(Path(args.output))

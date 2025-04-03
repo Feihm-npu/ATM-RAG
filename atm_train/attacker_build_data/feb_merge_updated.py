@@ -59,7 +59,7 @@ def parse_args():
 if __name__ == '__main__':
     args = parse_args()
 
-    ds_name = args.ds_name
+    # ds_name = args.ds_name
     fab_file_path = f'{args.fab_path}'
     ds_source_path = f'{args.dest_dir}'
 
