@@ -95,4 +95,4 @@ if __name__ == '__main__':
     ds = Dataset.from_dict(ds_dict, features=features)
     
     # Save to JSON
-    ds.to_json(Path(args.output))
+    ds.to_json(args.output)

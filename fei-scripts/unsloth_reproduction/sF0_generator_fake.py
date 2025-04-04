@@ -110,7 +110,7 @@ if __name__ == '__main__':
     # 解析命令行参数
     args = parse_args()
     ds_name = args.ds_name
-    dest_dir = Path(args.dest_dir)
+    dest_dir = args.dest_dir
     print("Loading dataset...")
     # 加载数据集
     ds = load_dataset('json', data_files=f'{ds_name}', split='train')
@@ -128,11 +128,9 @@ if __name__ == '__main__':
 
     print("Saving results...")
     # 创建输出目录
-    dest_dir = Path(args.dest_dir)
-    if not dest_dir.exists():
-        dest_dir.mkdir()
+    dest_dir = args.dest_dir
 
-    model_name = Path(args.model_name).name
+    # model_name = Path(args.model_name).name
 
     # 保存结果到CSV文件
     preds.to_csv(f'{dest_dir}', index=False)

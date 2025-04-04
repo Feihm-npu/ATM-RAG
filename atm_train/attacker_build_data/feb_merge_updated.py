@@ -50,6 +50,8 @@ def pre_replace_seps(output):
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--fab-path", default='nq-test', type=str)
+    parser.add_argument("--ds-source", required=True, type=str)
+    parser.add_argument("--fab-csv-path", default='nq-test', type=str)
     parser.add_argument("--num_dups", default=5, type=int)
     parser.add_argument("--epoch_suffix", default=0, type=int)
     parser.add_argument("--dest-dir", required=True, type=str)
@@ -61,10 +63,11 @@ if __name__ == '__main__':
 
     # ds_name = args.ds_name
     fab_file_path = f'{args.fab_path}'
-    ds_source_path = f'{args.dest_dir}'
+    ds_source_path = f'{args.ds_source}'
+    
 
-    dest_path = Path(args.dest_dir)
-    dest_path.mkdir(parents=True, exist_ok=True)
+    dest_path = args.dest_dir
+    # dest_path.mkdir(parents=True, exist_ok=True)
 
     fab_df = pd.read_csv(fab_file_path).fillna(method='ffill')
 
