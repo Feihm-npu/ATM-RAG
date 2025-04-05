@@ -34,10 +34,10 @@ mkdir -p $DPO_DS_PATH
 mkdir -p $MITO_DS_PATH
 
 ## Training environment
-export CUDA_VISIBLE_DEVICES=4,5,6,7 
+export CUDA_VISIBLE_DEVICES=5,6,7 
 export OMP_NUM_THREADS=64
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-world_size=4
+world_size=3
 
 ########### Step 0: Create initial fab dataset 
 
@@ -193,7 +193,7 @@ echo "Step 2 completed!"
 
 echo "Step 3: DPO training"
 
-# Part 1: Train the attacker model
+# Part 3: Train the attacker model
 if [ -f "${ADV_MODEL_PATH}adapter_config.json" ]; then
     echo "Attacker model already exists, skipping training."
 else
@@ -218,20 +218,7 @@ echo "Step 3 completed!"
 
 echo "Step 4: MITO data preparing"
 
-# Part 1: Generate MITO dataset
-# if [ -f "${MITO_DS_PATH}${DS}.json" ]; then
-#     echo "MITO dataset already exists, skipping generation."
-# else
-#     python /home/feihm/llm-fei/ATM-RAG/atm_train/attacker_build_data/feb_merge_updated.py \
-#         --fab-path ${FAB_DS_PATH}${DS}.csv \
-#         --ds-source ${DATASET_PATH}${DS}.json \
-#         --dest-dir ${MITO_DS_PATH}${DS}.json
 
-#     if [ ! -f "${MITO_DS_PATH}${DS}.json" ]; then
-#         echo "Error: MITO data preparation failed!"
-#         exit 1
-#     fi
-# fi
 
 # Part 1: Merge adv model for vllm
 if [ -f "${ADV_MODEL_VLLM_PATH}config.json" ]; then
@@ -261,14 +248,21 @@ else
         --ds_name ${DATASET_PATH}${DS}.json \
         --dest_dir ${MITO_DS_PATH}${DS}.csv
 
-    if [ -f "${MITO_DS_PATH}${DS}.csv" ]; then
+    if [ ! -f "${MITO_DS_PATH}${DS}.csv" ]; then
         echo "Error: FAB CSV dataset generation failed!"
         exit 1
     fi
     echo "First part completed!"
 fi
 
-# Part 3: Merge FAB dataset (json) for MITO
+# Part 3: Merge FAB dataset (json) for MITO, but now the data looks like:
+# {'question': Value(dtype='string', id=None),
+#  'answers': Sequence(feature=Value(dtype='string', id=None), length=-1, id=None),
+#  'ctxs': [{'hasanswer': Value(dtype='bool', id=None),
+#    'id': Value(dtype='string', id=None),
+#    'score': Value(dtype='string', id=None),
+#    'text': Value(dtype='string', id=None),
+#    'title': Value(dtype='string', id=None)}]}
 if [ -f "${MITO_DS_PATH}${DS}.json" ]; then
     echo "Second part (FAB json) already exists, skipping."
 else
@@ -286,7 +280,19 @@ else
     echo "Second part completed!"
 fi
 
-echo "Step 0 completed!"
+# Part 4: Generate MITO dataset, the output should have features {'prompt','chosen', 'rejected'}
+if [ -f "${MITO_DS_PATH}${DS}_mito.json" ]; then
+    echo "MITO dataset already exists, skipping generation."
+else
+    python /home/feihm/llm-fei/ATM-RAG/fei-scripts/unsloth_reproduction/sF4_build_mito.py \
+        --ds-source ${MITO_DS_PATH}${DS}.json \
+        --dest-dir ${MITO_DS_PATH}${DS}_mito.json
+
+    if [ ! -f "${MITO_DS_PATH}${DS}_mito.json" ]; then
+        echo "Error: MITO data preparation failed!"
+        exit 1
+    fi
+fi
 
 
 echo "Step 4 completed!"
@@ -301,10 +307,11 @@ echo "Step 5: MITO training the generator"
 # else
 python /home/feihm/llm-fei/ATM-RAG/fei-scripts/unsloth_reproduction/dpo_test.py \
     --model_name $GEN_MODEL_PATH \
-    --dataset_name ${MITO_DS_PATH}${DS}.json \
-    --batch_size 10 \
+    --dataset_name ${MITO_DS_PATH}${DS}_mito.json \
+    --batch_size 2 \
     --num_train_epochs 1 \
-    --output_dir $GEN_MODEL_PATH
+    --output_dir $GEN_MODEL_PATH 
+    # --max_steps 100 \
 
 #     if [ ! -d "$GEN_MODEL_PATH" ]; then
 #         echo "Error: MITO training failed!"
