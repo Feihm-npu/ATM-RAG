@@ -2,6 +2,7 @@ fei-scripts/experiments/
 fei-scripts/adv_outputs/
 fei-scripts/unsloth_compiled_cache/
 fei-scripts/experiments/unsloth_reproduction/
+fei-scripts/unsloth_reproduction
 !fei-scripts/experiments/unsloth_reproduction/*.py
 !fei-scripts/experiments/unsloth_reproduction/*.sh
 !fei-scripts/experiments/unsloth_reproduction/*.ipynb
