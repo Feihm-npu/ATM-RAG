@@ -4,8 +4,8 @@ set -e  # Exit immediately if a command exits with a non-zero status
 
 ## Variables
 
-ORI_ADV_MODEL=unsloth/Qwen2.5-7B
-ORI_GEN_MODEL=unsloth/Qwen2.5-7B
+ORI_ADV_MODEL=/home/feihm/.cache/huggingface/hub/models--unsloth--Qwen2-72B-Instruct-bnb-4bit
+ORI_GEN_MODEL=/home/feihm/.cache/huggingface/hub/models--unsloth--Qwen2-72B-Instruct-bnb-4bit
 
 # DATASET_PATH=/home/feihm/llm-fei/Data/NQ/
 DATASET_PATH=~/llm-fei/Data/NQ/contriever_nq/

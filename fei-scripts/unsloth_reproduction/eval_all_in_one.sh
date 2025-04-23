@@ -4,13 +4,13 @@ set -e  # Exit immediately if a command exits with a non-zero status
 
 ## Variables
 
-ORI_ADV_MODEL=Qwen/Qwen2-0.5B-Instruct
-ORI_GEN_MODEL=Qwen/Qwen2-0.5B-Instruct
+ORI_ADV_MODEL=unsloth/Qwen2-72B-Instruct-bnb-4bit
+ORI_GEN_MODEL=unsloth/Qwen2-72B-Instruct-bnb-4bit
 
 # DATASET_PATH=/home/feihm/llm-fei/Data/NQ/
 DATASET_PATH=~/llm-fei/Data/NQ/contriever_nq/
 DS=NQ
-EXP_PATH=./ATM_RAG_0421_only4eval
+EXP_PATH=./ATM_RAG_0422_pgs
 ADV_MODEL_PATH=${EXP_PATH}/adv_model/
 ADV_MODEL_VLLM_PATH=${EXP_PATH}/adv_model_vllm/
 GEN_MODEL_PATH=${EXP_PATH}/gen_model/
@@ -38,7 +38,7 @@ mkdir -p $EVAL_MODEL_PATH
 export CUDA_VISIBLE_DEVICES=2,3
 export OMP_NUM_THREADS=64
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-world_size=2
+world_size=1
 
 ########### Step 0: Create initial fab dataset 
 
@@ -50,7 +50,7 @@ if [ -f "${EVAL_MODEL_PATH}${DS}_eval.csv" ]; then
     python /home/feihm/llm-fei/ATM-RAG/fei-scripts/unsloth_reproduction/e2eval.py \
         --dataset ${DATASET_PATH}${DS}.json \
         --prediction ${EVAL_MODEL_PATH}${DS}_eval.csv \
-        --num_dups 5
+        --num_dups 2
 else
     echo "First part started!"
     python /home/feihm/llm-fei/ATM-RAG/fei-scripts/unsloth_reproduction/e1generate.py \
@@ -67,7 +67,7 @@ else
         python /home/feihm/llm-fei/ATM-RAG/fei-scripts/unsloth_reproduction/e2eval.py \
         --dataset ${DATASET_PATH}${DS}.json \
         --prediction ${EVAL_MODEL_PATH}${DS}_eval.csv \
-        --num_dups 5
+        --num_dups 2
     fi
     
     echo "First part completed!"

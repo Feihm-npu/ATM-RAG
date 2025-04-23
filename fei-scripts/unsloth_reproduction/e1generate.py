@@ -21,23 +21,20 @@ Question:
 <|im_start|>assistant
 """
 
-NUM_DUPS = 5
+NUM_DUPS = 2
 
 def format_row(example):
-    prompts = []
     ctxs = example['ctxs']
     question = example['question']
 
-    for i in range(min(NUM_DUPS, len(ctxs))):
-        ctx = ctxs[i]
-        paragraph = f"{ctx.get('title', '')}. {ctx.get('text', '')}"
-        prompt = PROMPT_TEMPLATE.format(paragraph=paragraph, question=question)
-        prompts.append(prompt)
+    # 拼接所有 ctx 的 title + text 为 paragraph
+    paragraph = "\n\n".join(
+        f"{ctx.get('title', '')}. {ctx.get('text', '')}" for ctx in ctxs
+    )
 
-    while len(prompts) < NUM_DUPS:
-        paragraph = "No document available."
-        prompt = PROMPT_TEMPLATE.format(paragraph=paragraph, question=question)
-        prompts.append(prompt)
+    # 构造单一 prompt，复制 NUM_DUPS 份
+    prompt = PROMPT_TEMPLATE.format(paragraph=paragraph, question=question)
+    prompts = [prompt for _ in range(NUM_DUPS)]
 
     return {'prompt': prompts}
 
@@ -55,7 +52,7 @@ def call_model_dup(prompts, model, max_new_tokens=32, num_dups=1):
     pdf = pd.DataFrame(prompts, columns=[f'input_{idx}' for idx in range(num_dups)])
 
     sampling_params = SamplingParams(
-        temperature=0.0,  # 使用 greedy 解码以获得 deterministic 输出
+        temperature=0.0,
         top_p=1.0,
         max_tokens=max_new_tokens
     )
@@ -64,7 +61,6 @@ def call_model_dup(prompts, model, max_new_tokens=32, num_dups=1):
 
     for idx in tqdm(range(num_dups), desc="Generating outputs"):
         raw_outputs = model.generate(pdf[f'input_{idx}'].tolist(), sampling_params)
-        # 截取第一个输出并 strip 空格
         preds = [out.outputs[0].text.strip() for out in raw_outputs]
         odf[f'output_{idx}'] = preds
 
@@ -79,7 +75,7 @@ if __name__ == '__main__':
     ds = ds.map(format_row, num_proc=8, remove_columns=ds.column_names)
 
     print(">> Loading model...")
-    model = LLM(model=args.model_name, tensor_parallel_size=args.world_size, trust_remote_code=True, disable_custom_all_reduce=True)
+    model = LLM(model=args.model_name, tensor_parallel_size=args.world_size, disable_custom_all_reduce=True)
 
     print(">> Generating predictions...")
     preds = call_model_dup(ds['prompt'], model, max_new_tokens=args.max_new_tokens, num_dups=NUM_DUPS)
