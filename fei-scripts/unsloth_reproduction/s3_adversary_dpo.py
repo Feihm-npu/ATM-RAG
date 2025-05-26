@@ -141,7 +141,7 @@ def main():
     tokenizer.pad_token = tokenizer.eos_token
     tokenizer.padding_side = "left"
 
-    raw_dataset = load_dataset("json", data_files=f'{args.train_file}', split="train")
+    raw_dataset = load_dataset("json", data_files=f'{args.train_file}', split="train").select(range(2000))
 
     training_args = TrainingArguments(
         output_dir=args.output_dir,
