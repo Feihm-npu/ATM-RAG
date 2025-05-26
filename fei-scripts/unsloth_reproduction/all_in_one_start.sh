@@ -4,13 +4,14 @@ set -e  # Exit immediately if a command exits with a non-zero status
 
 ## Variables
 
-ORI_ADV_MODEL=/home/feihm/.cache/huggingface/hub/models--unsloth--Qwen2-72B-Instruct-bnb-4bit
-ORI_GEN_MODEL=/home/feihm/.cache/huggingface/hub/models--unsloth--Qwen2-72B-Instruct-bnb-4bit
+ORI_ADV_MODEL=unsloth/Qwen2.5-7B-Instruct
+ORI_GEN_MODEL=unsloth/Qwen2.5-7B-Instruct
 
 # DATASET_PATH=/home/feihm/llm-fei/Data/NQ/
-DATASET_PATH=~/llm-fei/Data/NQ/contriever_nq/
-DS=NQ
-EXP_PATH=./ATM_RAG_0421
+DATASET_PATH=~/llm-fei/Data/NQ/contriever_nq_all_train/
+#DATASET_PATH=/home/feihm/llm-fei/zeming/GraphRAG/Data/datasets/ATM
+DS=train
+EXP_PATH=./ATM_RAG_0524
 ADV_MODEL_PATH=${EXP_PATH}/adv_model/
 ADV_MODEL_VLLM_PATH=${EXP_PATH}/adv_model_vllm/
 GEN_MODEL_PATH=${EXP_PATH}/gen_model/
@@ -33,10 +34,10 @@ mkdir -p $DPO_DS_PATH
 mkdir -p $MITO_DS_PATH
 
 ## Training environment
-export CUDA_VISIBLE_DEVICES=4,5
+export CUDA_VISIBLE_DEVICES=4,5,6,7
 export OMP_NUM_THREADS=64
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-world_size=2
+world_size=4
 
 ########### Step 0: Create initial fab dataset 
 
@@ -80,6 +81,7 @@ fi
 
 echo "Step 0 completed!"
 
+
 ########### Step 1: This script is used for initial fine-tuning the generator, only need to be run once.
 
 echo "Step 1: Prepare dataset for SFT"
@@ -89,7 +91,7 @@ if [ -f "$SFT_DS_PATH/dataset_info.json" ]; then
     echo "SFT dataset already exists, skipping data preparation."
 else
     echo "Data preparing"
-    python /home/feihm/llm-fei/ATM-RAG/atm_train/generator_sft/generator_sft_data_prepare.py \
+    python /home/feihm/llm-fei/ATM-RAG/atm_train/generator_sft/generator_sft_data_prepare_qwen.py \
         --model_path $ORI_GEN_MODEL \
         --data_path ${FAB_DS_PATH}${DS}.json \
         --dst_path $SFT_DS_PATH
@@ -106,7 +108,7 @@ if [ -f "${GEN_MODEL_PATH}adapter_config.json" ]; then
     echo "Generator model already exists, skipping fine-tuning."
 else
     echo "Start finetuning the generator"
-    python /home/feihm/llm-fei/ATM-RAG/fei-scripts/unsloth_reproduction/s1_tuning_generator.py \
+    CUDA_VISIBLE_DEVICES=4 python /home/feihm/llm-fei/ATM-RAG/fei-scripts/unsloth_reproduction/s1_tuning_generator.py \
         --model_name_or_path $ORI_GEN_MODEL \
         --train_data $SFT_DS_PATH \
         --per_device_train_batch_size 4 \
@@ -155,10 +157,10 @@ if [ -f "${DPO_DS_PATH}${DS}_score.csv" ]; then
 else
     echo "Generating score for DPO dataset"
     torchrun --nnodes=1 --nproc_per_node=$world_size \
-        /home/feihm/llm-fei/ATM-RAG/atm_train/ppl_infer/ppl_infer_with_trainer.py \
+        /home/feihm/llm-fei/ATM-RAG/atm_train/ppl_infer/ppl_infer_with_trainer_qwen.py \
         --model_name_or_path $GEN_MODEL_VLLM_PATH \
         --input_file ${FAB_DS_PATH}${DS}.json \
-        --per_device_eval_batch_size 32 \
+        --per_device_eval_batch_size 1 \
         --output ${DPO_DS_PATH}${DS}_score.csv
 
     if [ ! -f "${DPO_DS_PATH}${DS}_score.csv" ]; then
@@ -197,7 +199,7 @@ if [ -f "${ADV_MODEL_PATH}adapter_config.json" ]; then
     echo "Attacker model already exists, skipping training."
 else
     echo "Training started"
-    python /home/feihm/llm-fei/ATM-RAG/fei-scripts/unsloth_reproduction/s3_adversary_dpo.py \
+    CUDA_VISIBLE_DEVICES=4 python /home/feihm/llm-fei/ATM-RAG/fei-scripts/unsloth_reproduction/s3_adversary_dpo.py \
       --model_name $ORI_GEN_MODEL \
       --train_file ${DPO_DS_PATH}${DS}_dpo.json \
       --output_dir $ADV_MODEL_PATH \
@@ -304,7 +306,7 @@ echo "Step 5: MITO training the generator"
 # if [ -d "$GEN_MODEL_PATH" ]; then
 #     echo "Generator model already exists, skipping MITO training."
 # else
-python /home/feihm/llm-fei/ATM-RAG/fei-scripts/unsloth_reproduction/dpo_test.py \
+CUDA_VISIBLE_DEVICES=4 python /home/feihm/llm-fei/ATM-RAG/fei-scripts/unsloth_reproduction/dpo_test.py \
     --model_name $GEN_MODEL_PATH \
     --dataset_name ${MITO_DS_PATH}${DS}_mito.json \
     --batch_size 2 \

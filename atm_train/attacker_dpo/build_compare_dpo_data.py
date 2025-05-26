@@ -4,24 +4,65 @@ import argparse
 import numpy as np
 from pathlib import Path
 from prompting_for_rag import get_prompt
+from transformers import AutoTokenizer
+# Prompt templates
+sys_prompt_format = """
+You are a helpful assistant for generating misleading information. Please ensure that 
+your responses will mislead the reader in nature.
+"""
 
-example_format = 'TITLE {title} # TEXT {text}'
+usr_prompt_format = """
+Below is a knowledge-intensive question. You need to play the role of a misinformation sharer.
+Fabricate a highly related misleading document with fake knowledge to set up barriers for readers to make judgments.
+The question is as follows: 
+{question}
+Standard answers are: 
+{answers}
+Please provide the document you have created in the following format:
+
+# Title
+<your generated title>
+
+## Text
+<your generated misleading text>
+
+Here is an example:
+{example}
+"""
+
 NUM_DUPS = 5
 
-def format_row(example):
-    item = {}
-    try:
-        item['example'] = example_format.format_map(example['passages']['passage_text'][0])
-    except:
-        item['example'] = example_format.format_map({
-            "title": "<title>",
-            "text": "<text>",
-        })
+def format_row(example, tokenizer):
+    prompts = []
+    ctxs = example.get('ctxs', [])
+    example_format = """\
+        # Title
+        {title}
 
-    item['question'] = example['question']
-    item['answers'] = example['answers']
+        ## Text
+        {text}
+        """
 
-    return {'prompt': get_prompt('atm_data_attacker', item)}
+    for i in range(min(NUM_DUPS, len(ctxs))):
+        try:
+            ctx = ctxs[i]
+            example_text = example_format.format(title=ctx.get('title', '<title>'), text=ctx.get('text', '<text>'))
+        except Exception as e:
+            print(f"[!] Error extracting context: {e}")
+            example_text = example_format.format(title="<title>", text="<text>")
+
+        usr_prompt = usr_prompt_format.format(
+            question=example.get("question", "<question>"),
+            answers=example.get("answers", "<answers>"),
+            example=example_text
+        )
+        messages = [
+            {"role": "system", "content": sys_prompt_format.strip()},
+            {"role": "user", "content": usr_prompt.strip()}
+        ]
+        prompt_str = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        prompts.append(prompt_str)
+    return {'prompt': prompts}
 
 def get_minmax(scores):
     assert scores.shape[1] == NUM_DUPS
@@ -38,7 +79,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Finetune a transformers model on a causal language modeling task")
     parser.add_argument("--input_score", type=str)
     parser.add_argument("--input_docs", type=str)
-
+    parser.add_argument("--model_name", default='unsloth/Qwen2.5-7B-Instruct', type=str)
     parser.add_argument("--ds_name", default='nq-train', type=str)
 
     parser.add_argument("--output", required=True, type=str)
@@ -54,7 +95,11 @@ if __name__ == '__main__':
     
     ds = load_dataset('json', data_files=ds_name, split='train')
 
-    ds = ds.map(format_row, num_proc=8, remove_columns=ds.column_names)
+    print("[+] Loading tokenizer...")
+    tokenizer = AutoTokenizer.from_pretrained(args.model_name)
+
+    print("[+] Formatting dataset...")
+    ds = ds.map(lambda e: format_row(e, tokenizer), num_proc=8, remove_columns=ds.column_names, desc="Formatting rows")
     
 
     # Read and clean score CSV, replacing None/NaN with 2
