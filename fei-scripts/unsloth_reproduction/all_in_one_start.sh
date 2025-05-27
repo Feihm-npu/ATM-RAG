@@ -34,10 +34,10 @@ mkdir -p $DPO_DS_PATH
 mkdir -p $MITO_DS_PATH
 
 ## Training environment
-export CUDA_VISIBLE_DEVICES=4,5,6,7
+export CUDA_VISIBLE_DEVICES=2,3,4,5,6,7
 export OMP_NUM_THREADS=64
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-world_size=4
+world_size=6
 
 ########### Step 0: Create initial fab dataset 
 
@@ -306,12 +306,26 @@ echo "Step 5: MITO training the generator"
 # if [ -d "$GEN_MODEL_PATH" ]; then
 #     echo "Generator model already exists, skipping MITO training."
 # else
-CUDA_VISIBLE_DEVICES=4 python /home/feihm/llm-fei/ATM-RAG/fei-scripts/unsloth_reproduction/dpo_test.py \
-    --model_name $GEN_MODEL_PATH \
-    --dataset_name ${MITO_DS_PATH}${DS}_mito.json \
-    --batch_size 2 \
+
+
+# CUDA_VISIBLE_DEVICES=4 python /home/feihm/llm-fei/ATM-RAG/fei-scripts/unsloth_reproduction/dpo_test.py \
+#     --model_name $GEN_MODEL_PATH \
+#     --dataset_name ${MITO_DS_PATH}${DS}_mito.json \
+#     --batch_size 2 \
+#     --num_train_epochs 1 \
+#     --output_dir $GEN_MODEL_PATH 
+
+# multiple gpus
+accelerate launch --config_file ds_configs/ds_config_zero1.yaml mito_ds.py \
+    --model_name $ORI_GEN_MODEL \
+    --adapter $GEN_MODEL_PATH \
+    --dataset_name ${MITO_DS_PATH}${DS}_mito.json  \
+    --batch_size 10 \
+    --max_steps 100 \
     --num_train_epochs 1 \
-    --output_dir $GEN_MODEL_PATH 
+    --output_dir $GEN_MODEL_PATH  
+
+
     # --max_steps 100 \
 
 #     if [ ! -d "$GEN_MODEL_PATH" ]; then

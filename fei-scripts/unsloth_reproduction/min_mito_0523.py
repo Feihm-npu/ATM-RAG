@@ -120,6 +120,9 @@ class minimal_MITOTrainer(DPOTrainer):
         super().__init__(model=model, ref_model=ref_model, args=args, **kwargs)
         
         self.mito_alpha = getattr(self.args, "mito_alpha", self.args.beta) 
+        if self.mito_alpha is None:
+            print(f'Setting self.mito_alpha to 0.1')
+            self.mito_alpha = 0.1
         if not hasattr(self.args, "mito_alpha") and self.is_world_process_zero():
             warnings.warn(
                 f"`mito_alpha` not found in DPOConfig, using `beta` ({self.args.beta}) from DPOConfig instead. "
