@@ -3,10 +3,10 @@ import os
 import numpy as np
 import torch
 import wandb
-from unsloth import FastLanguageModel, PatchDPOTrainer
-PatchDPOTrainer()
+# from unsloth import FastLanguageModel, PatchDPOTrainer
+# PatchDPOTrainer()
 from datasets import load_dataset
-from transformers import TrainingArguments
+from transformers import TrainingArguments, AutoTokenizer, AutoModelForCausalLM
 from trl import DPOTrainer
 
 # -------- Tokenization Helpers --------
@@ -101,10 +101,10 @@ def tokenize_row(feature, tokenizer):
 # -------- Main Training Script --------
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model_name", type=str, default="unsloth/Qwen2.5-7B")
+    parser.add_argument("--model_name", type=str, default="Qwen/Qwen2.5-7B-Instruct")
     parser.add_argument("--train_file", type=str, required=True)
     parser.add_argument("--output_dir", type=str, default="./s2_experiments/model_1epoch_dpo")
-    parser.add_argument("--wandb_project", type=str, default="unsloth-dpo")
+    parser.add_argument("--wandb_project", type=str, default="dpo")
     parser.add_argument("--per_device_train_batch_size", type=int, default=2)
     parser.add_argument("--per_device_eval_batch_size", type=int, default=2)
     parser.add_argument("--learning_rate", type=float, default=2e-5)
@@ -119,24 +119,22 @@ def main():
     args = parse_args()
     wandb.init(project=args.wandb_project)
 
-    model, tokenizer = FastLanguageModel.from_pretrained(
+    model = AutoModelForCausalLM.from_pretrained(
         model_name=args.model_name,
-        max_seq_length=max_length,
-        dtype=torch.bfloat16 if args.bf16 else torch.float32,
-        load_in_4bit=False,
+        attn_implementation="flash_attention_2",
     )
-
-    model = FastLanguageModel.get_peft_model(
-        model,
-        r=16,
-        target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
-        lora_alpha=16,
-        lora_dropout=0,
-        bias="none",
-        use_gradient_checkpointing="unsloth",
-        random_state=3407,
-        use_rslora=False,
-    )
+    tokenizer = AutoTokenizer.from_pretrained(pretrained_model_name_or_path=args.model_name)
+    # model = FastLanguageModel.get_peft_model(
+    #     model,
+    #     r=16,
+    #     target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
+    #     lora_alpha=16,
+    #     lora_dropout=0,
+    #     bias="none",
+    #     use_gradient_checkpointing="unsloth",
+    #     random_state=3407,
+    #     use_rslora=False,
+    # )
 
     tokenizer.pad_token = tokenizer.eos_token
     tokenizer.padding_side = "left"

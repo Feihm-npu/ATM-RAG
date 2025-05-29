@@ -70,7 +70,7 @@ def format_row(example, tokenizer):
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--ds_name", default='nq-train', type=str)
-    parser.add_argument("--model_name", default='unsloth/Qwen2.5-7B-Instruct', type=str)
+    parser.add_argument("--model_name", default='Qwen/Qwen2.5-7B-Instruct', type=str)
     parser.add_argument("--world_size", default=2, type=int)
     parser.add_argument("--max_new_tokens", default=512, type=int)
     parser.add_argument("--dest_dir", required=True, type=str)

@@ -69,7 +69,7 @@ def main():
         args.adapter,
         is_trainable=True,
     )
-    ref_model = model
+    # ref_model = model
 
     logger.info("Model loaded.")
     tokenizer = AutoTokenizer.from_pretrained(pretrained_model_name_or_path=args.model_name)
