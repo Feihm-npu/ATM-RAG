@@ -1,7 +1,7 @@
 import torch
 import argparse
-from transformers import AutoTokenizer
-from unsloth import FastLanguageModel
+from transformers import AutoTokenizer, AutoModelForCausalLM
+# from unsloth import FastLanguageModel
 from peft import PeftModel
 
 def main():
@@ -14,13 +14,10 @@ def main():
     args = parser.parse_args()
 
     # Step 1: 加载 base 模型
-    model, tokenizer = FastLanguageModel.from_pretrained(
-        model_name = args.base_model_name,
-        max_seq_length = 4096,
-        dtype = torch.bfloat16,
-        load_in_4bit = False,
+    model= AutoModelForCausalLM.from_pretrained(
+        pretrained_model_name_or_path = args.base_model_name,
     )
-
+    tokenizer = AutoTokenizer.from_pretrained(pretrained_model_name_or_path=args.base_model_name)
     # Step 3: 使用 PeftModel 的方法合并 LoRA 权重
     model = PeftModel.from_pretrained(model, args.adapter_dir)
 

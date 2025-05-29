@@ -176,7 +176,7 @@ def main():
     # If you were saving manually:
     # unwrapped_model = accelerator.unwrap_model(model)
     # unwrapped_model.save_pretrained(final_save_path)
-    if is_main_process():
+    if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
         mito_trainer.save_model(final_save_path) 
         tokenizer.save_pretrained(final_save_path)
         logger.info(f"Successfully completed training. Model saved to: {final_save_path}")
