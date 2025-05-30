@@ -104,7 +104,7 @@ else
 fi
 
 # Part 2: Fine-tune the generator
-if [ -f "${GEN_MODEL_PATH}adapter_config.json" ]; then
+if [ -f "${GEN_MODEL_PATH}config.json" ]; then
     echo "Generator model already exists, skipping fine-tuning."
 else
     echo "Start finetuning the generator"
@@ -122,10 +122,10 @@ else
         --learning_rate 5e-6 \
         --wandb_project atm-sft-qwen
 
-    # if [ ! -f "${GEN_MODEL_PATH}adapter_config.json" ]; then
-    #     echo "Error: Generator fine-tuning failed!"
-    #     exit 1
-    # fi
+    if [ ! -f "${GEN_MODEL_PATH}config.json" ]; then
+        echo "Error: Generator fine-tuning failed!"
+        exit 1
+    fi
     echo "Generator SFT completed!"
 fi
 exit 1
