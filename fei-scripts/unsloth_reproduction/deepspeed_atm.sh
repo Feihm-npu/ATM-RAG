@@ -37,6 +37,9 @@ mkdir -p $MITO_DS_PATH
 export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 export OMP_NUM_THREADS=64
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+# This is added to solve the conflicts of the conflicts rooted from the combination: deepspeed + HF Transformers + PyTorch 2.2+
+export TORCH_DISTRIBUTED_DEFAULT_DTENSOR=0
+
 world_size=8
 vllm_world_size=4
 ########### Step 0: Create initial fab dataset 
@@ -128,40 +131,23 @@ else
     fi
     echo "Generator SFT completed!"
 fi
-exit 1
-# Part 3: Merge model for vllm
-if [ -f "${GEN_MODEL_VLLM_PATH}config.json" ]; then
-    echo "vLLM model already exists, skipping merging."
-else
-    echo "Merging model for vllm"
 
-    python /home/feihm/llm-fei/ATM-RAG/fei-scripts/unsloth_reproduction/merge_lora2vllm.py \
-        --base_model_name $ORI_GEN_MODEL \
-        --adapter_dir $GEN_MODEL_PATH \
-        --output_dir $GEN_MODEL_VLLM_PATH
+echo "*********************************************************************************"
 
-    if [ ! -f "${GEN_MODEL_VLLM_PATH}config.json" ]; then
-        echo "Error: Model merging for vllm failed!"
-        exit 1
-    fi
-fi
-
-echo "Step 1 completed!"
-
-########### Step 2: This script is used for building the DPO pairwise dataset, using the ppl output as the score.
-
-echo "Step 2: Build DPO dataset"
+########### Step 1: This script is used for building the DPO pairwise dataset, using the ppl output as the score.
+echo "DPO start!"
+echo "Step 1: Build DPO dataset"
 
 # Part 1: Generate score for DPO dataset
 if [ -f "${DPO_DS_PATH}${DS}_score.csv" ]; then
     echo "DPO score already exists, skipping score generation."
 else
     echo "Generating score for DPO dataset"
-    torchrun --nnodes=1 --nproc_per_node=$world_size \
+    accelerate launch --config_file /home/feihm/llm-fei/ATM-RAG/fei-scripts/unsloth_reproduction/accelerate_configs/default_config.yaml \
         /home/feihm/llm-fei/ATM-RAG/atm_train/ppl_infer/ppl_infer_with_trainer_qwen.py \
-        --model_name_or_path $GEN_MODEL_VLLM_PATH \
+        --model_name_or_path $GEN_MODEL_PATH \
         --input_file ${FAB_DS_PATH}${DS}.json \
-        --per_device_eval_batch_size 1 \
+        --per_device_eval_batch_size 10 \
         --output ${DPO_DS_PATH}${DS}_score.csv
 
     if [ ! -f "${DPO_DS_PATH}${DS}_score.csv" ]; then
@@ -189,25 +175,29 @@ else
     echo "DPO dataset generated"
 fi
 
-echo "Step 2 completed!"
+# echo "Step 2 completed!"
 
 ########### Step 3: This script is used for training the attacker model with DPO.
 
 echo "Step 3: DPO training"
 
 # Part 3: Train the attacker model
-if [ -f "${ADV_MODEL_PATH}adapter_config.json" ]; then
+if [ -f "${ADV_MODEL_PATH}config.json" ]; then
     echo "Attacker model already exists, skipping training."
 else
     echo "Training started"
-    CUDA_VISIBLE_DEVICES=4 python /home/feihm/llm-fei/ATM-RAG/fei-scripts/unsloth_reproduction/s3_adversary_dpo.py \
+    accelerate launch --config_file ds_configs/ds_config_zero1.yaml /home/feihm/llm-fei/ATM-RAG/fei-scripts/unsloth_reproduction/s3_adversary_dpo.py \
       --model_name $ORI_GEN_MODEL \
+      --ref_model $ORI_GEN_MODEL \
       --train_file ${DPO_DS_PATH}${DS}_dpo.json \
+      --per_device_train_batch_size 2 \
+      --max_steps 100 \
+      --gradient_accumulation_steps 1 \
       --output_dir $ADV_MODEL_PATH \
       --wandb_project unsloth-s3-attacker-dpo \
       --bf16
 
-    if [ ! -f "${ADV_MODEL_PATH}adapter_config.json" ]; then
+    if [ ! -f "${ADV_MODEL_PATH}config.json" ]; then
         echo "Error: DPO training failed!"
         exit 1
     fi
@@ -221,31 +211,13 @@ echo "Step 3 completed!"
 echo "Step 4: MITO data preparing"
 
 
-
-# Part 1: Merge adv model for vllm
-if [ -f "${ADV_MODEL_VLLM_PATH}config.json" ]; then
-    echo "vLLM model already exists, skipping merging."
-else
-    echo "Merging model for vllm"
-
-    python /home/feihm/llm-fei/ATM-RAG/fei-scripts/unsloth_reproduction/merge_lora2vllm.py \
-        --base_model_name $ORI_ADV_MODEL \
-        --adapter_dir $ADV_MODEL_PATH \
-        --output_dir $ADV_MODEL_VLLM_PATH
-
-    if [ ! -f "${ADV_MODEL_VLLM_PATH}config.json" ]; then
-        echo "Error: Model merging for vllm failed!"
-        exit 1
-    fi
-fi
-
 # Part 2: Generate initial MITO dataset (CSV)
 if [ -f "${MITO_DS_PATH}${DS}.csv" ]; then
     echo "First part (DPO CSV) already exists, skipping."
 else
     echo "First part started!"
     python /home/feihm/llm-fei/ATM-RAG/fei-scripts/unsloth_reproduction/sF0_generator_fake.py \
-        --model_name $ADV_MODEL_VLLM_PATH \
+        --model_name $ADV_MODEL_PATH \
         --world_size $world_size \
         --ds_name ${DATASET_PATH}${DS}.json \
         --dest_dir ${MITO_DS_PATH}${DS}.csv
@@ -298,7 +270,7 @@ fi
 
 
 echo "Step 4 completed!"
-
+# exit 1
 ########### Step 5: This script is used for MITO training the generator.
 
 echo "Step 5: MITO training the generator"
@@ -318,8 +290,7 @@ echo "Step 5: MITO training the generator"
 
 # multiple gpus
 accelerate launch --config_file ds_configs/ds_config_zero1.yaml mito_ds.py \
-    --model_name $ORI_GEN_MODEL \
-    --adapter $GEN_MODEL_PATH \
+    --model_name $GEN_MODEL_PATH \
     --dataset_name ${MITO_DS_PATH}${DS}_mito.json  \
     --batch_size 10 \
     --max_steps 100 \
@@ -334,5 +305,5 @@ accelerate launch --config_file ds_configs/ds_config_zero1.yaml mito_ds.py \
 #         exit 1
 #     fi
 # fi
-echo "Last step needs human check!"
+echo "Last step needs mannual check!"
 echo "All steps completed successfully!"

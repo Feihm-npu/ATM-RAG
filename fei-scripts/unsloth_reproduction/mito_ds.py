@@ -33,7 +33,7 @@ def main():
     # Parse command line arguments
     parser = argparse.ArgumentParser(description='Train MITO model')
     parser.add_argument('--model_name', type=str, required=True, help='Base model name or path')
-    parser.add_argument('--adapter', type=str, required=True, help='Adapter')
+    # parser.add_argument('--adapter', type=str, required=True, help='Adapter')
     parser.add_argument('--dataset_name', type=str, required=True, help='Path to the training dataset JSON file')
     parser.add_argument('--batch_size', type=int, default=8, help='Batch size per device for training')
     parser.add_argument('--num_train_epochs', type=int, default=3, help='Number of training epochs')
@@ -59,16 +59,17 @@ def main():
     logger.info(f"Loading model: {args.model_name}")
 
 
-    model = AutoModelForCausalLM.from_pretrained(
-        pretrained_model_name_or_path=args.model_name,
+    model = args.model_name
+    
+    model_kwargs = dict(
         attn_implementation="flash_attention_2",
-        # torch_dtype=torch.float16
+        torch_dtype=torch.bfloat16,
     )
-    model = PeftModel.from_pretrained(
-        model,
-        args.adapter,
-        is_trainable=True,
-    )
+    # model = PeftModel.from_pretrained(
+    #     model,
+    #     args.adapter,
+    #     is_trainable=True,
+    # )
     # ref_model = model
 
     logger.info("Model loaded.")
@@ -110,6 +111,7 @@ def main():
     # Configure DPO training arguments (used by minimal_MITOTrainer)
     # MITOConfig should be a subclass of TrainingArguments or DPOConfig
     dpo_config = MITOConfig(
+        model_init_kwargs=model_kwargs,
         per_device_train_batch_size=args.batch_size,
         # gradient_accumulation_steps=args.gradient_accumulation_steps,
         warmup_ratio=args.warmup_ratio,
@@ -134,7 +136,7 @@ def main():
         max_prompt_length=args.dpo_max_prompt_length,
         gradient_checkpointing=True,
         # max_completion_length=args.dpo_max_completion_length,
-
+        dataset_num_proc=32,
         remove_unused_columns=False,
         sft_on_d_prime=False, # Assuming this is a custom arg for MITOConfig
         # report_to="wandb", # If you use wandb, configure it in TrainingArguments

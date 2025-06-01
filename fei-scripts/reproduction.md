@@ -127,3 +127,14 @@ def is_wandb_available() -> bool:
 def is_peft_available() -> bool:
     return _peft_available
 ```
+
+---------
+## 全自动运行思路
+
+### 准备
+1. 准备初始fab数据 -->  \${FAB_DS_PATH}\${DS}.json
+2. Fine tuning 模型 --> \$GEN_MODEL_PATH
+
+
+### 循环
+1. 
