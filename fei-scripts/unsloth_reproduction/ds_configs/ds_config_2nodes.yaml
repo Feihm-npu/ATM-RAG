@@ -2,22 +2,21 @@ compute_environment: LOCAL_MACHINE
 debug: false
 deepspeed_config:
   deepspeed_hostfile: /home/feihm/llm-fei/ATM-RAG/fei-scripts/unsloth_reproduction/ds_configs/hosts.cfg
-  deepspeed_moe_layer_cls_names: Qwen2MoeSparseMoeBlock
   deepspeed_multinode_launcher: pdsh
   gradient_accumulation_steps: 1
-  zero3_init_flag: false
-  zero_stage: 1
+  zero3_init_flag: True
+  zero_stage: 3
 distributed_type: DEEPSPEED
 downcast_bf16: 'no'
 enable_cpu_affinity: false
 machine_rank: 0
-gpu_ids: '0'
+gpu_ids: '0,1,2,3,4,5,6,7'
 main_process_ip: 10.246.80.2
 main_process_port: 8020
 main_training_function: main
 mixed_precision: bf16
 num_machines: 2
-num_processes: 2
+num_processes: 12
 rdzv_backend: static
 same_network: true
 tpu_env: []

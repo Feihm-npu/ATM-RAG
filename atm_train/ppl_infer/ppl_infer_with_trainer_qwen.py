@@ -7,7 +7,9 @@ from transformers import (
     TrainingArguments, 
     Trainer, 
     DataCollatorForLanguageModeling,
-    DataCollatorForSeq2Seq
+    DataCollatorForSeq2Seq,
+    Seq2SeqTrainingArguments,
+    Seq2SeqTrainer
 )
 from dataclasses import dataclass
 from typing import Any, Dict, List
@@ -45,19 +47,19 @@ def template_from_file(example):
     return example
 
 
-class LossPerSampleTrainer(Trainer):
-    def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys=None):
-        with torch.no_grad():
-            outputs = model(**inputs)
-            logits = outputs.logits
-            labels = inputs['labels']
-            shift_logits = logits[..., :-1, :].contiguous()
-            shift_labels = labels[..., 1:].contiguous()
-            loss_fct = torch.nn.CrossEntropyLoss(ignore_index=-100, reduction="none")
-            losses = loss_fct(shift_logits.transpose(1,2), shift_labels)
-            per_sample_loss = (losses.sum(dim=1) / (shift_labels != -100).sum(dim=1))
-            per_sample_loss = per_sample_loss.float()
-            return (None, per_sample_loss, None)  # logits -> results.predictions
+# class LossPerSampleTrainer(Trainer):
+#     def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys=None):
+#         with torch.no_grad():
+#             outputs = model(**inputs)
+#             logits = outputs.logits
+#             labels = inputs['labels']
+#             shift_logits = logits[..., :-1, :].contiguous()
+#             shift_labels = labels[..., 1:].contiguous()
+#             loss_fct = torch.nn.CrossEntropyLoss(ignore_index=-100, reduction="none")
+#             losses = loss_fct(shift_logits.transpose(1,2), shift_labels)
+#             per_sample_loss = (losses.sum(dim=1) / (shift_labels != -100).sum(dim=1))
+#             per_sample_loss = per_sample_loss.float()
+#             return (None, per_sample_loss, None)  # logits -> results.predictions
 
 
 
@@ -83,7 +85,7 @@ def format_tokenize_row(example, tokenizer):
         example['attention_mask'][idx] += [1] * len(ans_encs['input_ids'][idx] + [tokenizer.eos_token_id])
         assert len(example['input_ids'][idx]) == len(example['labels'][idx])
         assert len(example['attention_mask'][idx]) == len(example['labels'][idx])
-
+    return example
 
 
 def parse_args():
@@ -113,14 +115,14 @@ def main():
     # 2) Trainer + DataCollator
 
 
-    training_args = TrainingArguments(
+    training_args = Seq2SeqTrainingArguments(
         output_dir="./eval_outdir",
         per_device_eval_batch_size=args.per_device_eval_batch_size,
         remove_unused_columns=False,
         report_to="none",
         prediction_loss_only=True,
     )
-    trainer = LossPerSampleTrainer(
+    trainer = Seq2SeqTrainer(
         model=model,
         args=training_args,
         data_collator=DataCollatorForSeq2Seq(tokenizer, pad_to_multiple_of=8),

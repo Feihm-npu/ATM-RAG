@@ -116,7 +116,7 @@ if [ -f "${GEN_MODEL_PATH}config.json" ]; then
     echo "Generator model already exists, skipping fine-tuning."
 else
     echo "Start finetuning the generator"
-    accelerate launch --config_file ds_configs/ds_config_2nodes.yaml /home/feihm/llm-fei/ATM-RAG/fei-scripts/unsloth_reproduction/s1_tuning_generator.py \
+    accelerate launch --config_file ds_configs/default_config.yaml /home/feihm/llm-fei/ATM-RAG/fei-scripts/unsloth_reproduction/s1_tuning_generator.py \
         --model_name_or_path $ORI_GEN_MODEL \
         --train_data $SFT_DS_PATH \
         --per_device_train_batch_size 1 \
@@ -148,11 +148,12 @@ if [ -f "${DPO_DS_PATH}${DS}_score.csv" ]; then
     echo "DPO score already exists, skipping score generation."
 else
     echo "Generating score for DPO dataset"
-    accelerate launch --config_file /home/feihm/llm-fei/ATM-RAG/fei-scripts/unsloth_reproduction/ds_configs/ds_config_2nodes.yaml \
+    accelerate launch --config_file /home/feihm/llm-fei/ATM-RAG/fei-scripts/unsloth_reproduction/ds_configs/default_config.yaml \
         /home/feihm/llm-fei/ATM-RAG/atm_train/ppl_infer/ppl_infer_with_trainer_qwen.py \
         --model_name_or_path $GEN_MODEL_PATH \
         --input_file ${FAB_DS_PATH}${DS}.json \
         --per_device_eval_batch_size 10 \
+        --num_procs 64 \
         --output ${DPO_DS_PATH}${DS}_score.csv
 
     if [ ! -f "${DPO_DS_PATH}${DS}_score.csv" ]; then
@@ -161,7 +162,7 @@ else
     fi
     echo "Score collected"
 fi
-
+exit 1
 # Part 2: Build pairwise data for DPO
 if [ -f "${DPO_DS_PATH}${DS}_dpo.json" ]; then
     echo "DPO dataset already exists, skipping pairwise data generation."
@@ -171,6 +172,7 @@ else
         --input_score ${DPO_DS_PATH}${DS}_score.csv \
         --input_docs ${FAB_DS_PATH}${DS}.csv \
         --ds_name ${FAB_DS_PATH}${DS}.json \
+        --num_procs 64 \
         --output ${DPO_DS_PATH}${DS}_dpo.json
 
     if [ ! -f "${DPO_DS_PATH}${DS}_dpo.json" ]; then
@@ -191,7 +193,7 @@ if [ -f "${ADV_MODEL_PATH}config.json" ]; then
     echo "Attacker model already exists, skipping training."
 else
     echo "Training started"
-    accelerate launch --config_file ds_configs/ds_config_zero1.yaml /home/feihm/llm-fei/ATM-RAG/fei-scripts/unsloth_reproduction/s3_adversary_dpo.py \
+    accelerate launch --config_file ds_configs/default_config.yaml /home/feihm/llm-fei/ATM-RAG/fei-scripts/unsloth_reproduction/s3_adversary_dpo.py \
       --model_name $ORI_GEN_MODEL \
       --ref_model $ORI_GEN_MODEL \
       --train_file ${DPO_DS_PATH}${DS}_dpo.json \
@@ -294,7 +296,7 @@ echo "Step 5: MITO training the generator"
 #     --output_dir $GEN_MODEL_PATH 
 
 # multiple gpus
-accelerate launch --config_file ds_configs/ds_config_zero1.yaml mito_ds.py \
+accelerate launch --config_file ds_configs/default_config.yaml mito_ds.py \
     --model_name $GEN_MODEL_PATH \
     --dataset_name ${MITO_DS_PATH}${DS}_mito.json  \
     --batch_size 10 \
