@@ -106,7 +106,7 @@ def main():
     ds = load_dataset("json", data_files=args.input_file, split="train")
     # 1) 处理成一条一条 prompt
     with accelerator.main_process_first():
-        ds = ds.map(template_from_file, num_proc=args.num_proc, remove_columns=ds.column_names)
+        ds = ds.map(template_from_file, num_proc=args.num_procs, remove_columns=ds.column_names)
         ds = ds.map(format_tokenize_row, fn_kwargs={'tokenizer': tokenizer}, num_proc=args.num_proc, remove_columns=ds.column_names, batched=True, batch_size=1)
         print(ds)
     # return

@@ -36,7 +36,7 @@ mkdir -p $DPO_DS_PATH
 mkdir -p $MITO_DS_PATH
 
 ## Training environment
-export CUDA_VISIBLE_DEVICES=2,3,4,5
+export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 export OMP_NUM_THREADS=64
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 # This is added to solve the conflicts of the conflicts rooted from the combination: deepspeed + HF Transformers + PyTorch 2.2+
@@ -89,7 +89,7 @@ fi
 
 echo "Step 0 completed!"
 echo "*********************************************************************************"
-exit 1
+
 ########### Step 1: This script is used for initial fine-tuning the generator, only need to be run once.
 
 echo "Step 1: Prepare dataset for SFT"
@@ -116,7 +116,7 @@ if [ -f "${GEN_MODEL_PATH}config.json" ]; then
     echo "Generator model already exists, skipping fine-tuning."
 else
     echo "Start finetuning the generator"
-    accelerate launch --config_file ds_configs/ds_config_zero1.yaml /home/feihm/llm-fei/ATM-RAG/fei-scripts/unsloth_reproduction/s1_tuning_generator.py \
+    accelerate launch --config_file ds_configs/ds_config_2nodes.yaml /home/feihm/llm-fei/ATM-RAG/fei-scripts/unsloth_reproduction/s1_tuning_generator.py \
         --model_name_or_path $ORI_GEN_MODEL \
         --train_data $SFT_DS_PATH \
         --per_device_train_batch_size 1 \
@@ -148,7 +148,7 @@ if [ -f "${DPO_DS_PATH}${DS}_score.csv" ]; then
     echo "DPO score already exists, skipping score generation."
 else
     echo "Generating score for DPO dataset"
-    accelerate launch --config_file /home/feihm/llm-fei/ATM-RAG/fei-scripts/unsloth_reproduction/accelerate_configs/default_config.yaml \
+    accelerate launch --config_file /home/feihm/llm-fei/ATM-RAG/fei-scripts/unsloth_reproduction/ds_configs/ds_config_2nodes.yaml \
         /home/feihm/llm-fei/ATM-RAG/atm_train/ppl_infer/ppl_infer_with_trainer_qwen.py \
         --model_name_or_path $GEN_MODEL_PATH \
         --input_file ${FAB_DS_PATH}${DS}.json \
