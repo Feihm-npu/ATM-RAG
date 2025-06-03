@@ -92,7 +92,7 @@ def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--model_name_or_path", required=True)
     p.add_argument("--input_file", required=True)
-    p.add_argument("--per_device_eval_batch_size", type=int, default=1)
+    p.add_argument("--per_device_eval_batch_size", type=int, default=20)
     p.add_argument("--num_procs", type=int, default=8)
     p.add_argument("--num_dups", type=int, default=5)
     p.add_argument("--output", required=True)

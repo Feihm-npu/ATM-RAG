@@ -3,15 +3,15 @@ debug: false
 deepspeed_config:
   deepspeed_multinode_launcher: standard
   gradient_accumulation_steps: 1
-  zero3_init_flag: false
-  zero_stage: 1
+  zero3_init_flag: True
+  zero_stage: 3
   train_micro_batch_size_per_gpu: 2
 distributed_type: DEEPSPEED
 downcast_bf16: 'no'
 machine_rank: 0
 main_training_function: main
 num_machines: 1
-num_processes: 4
+num_processes: 8
 rdzv_backend: static
 same_network: true
 tpu_env: []

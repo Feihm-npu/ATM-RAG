@@ -41,6 +41,17 @@ export OMP_NUM_THREADS=64
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 # This is added to solve the conflicts of the conflicts rooted from the combination: deepspeed + HF Transformers + PyTorch 2.2+
 export TORCH_DISTRIBUTED_DEFAULT_DTENSOR=0
+export NCCL_SOCKET_IFNAME=eth0
+export NCCL_INCLUDE_SUBNET=10.246.80.0/24  # 强制使用宿主机网段
+export NCCL_EXCLUDE_SUBNET=10.98.0.0/16,10.89.0.0/16  # 排除容器网段
+
+# 确保PyTorch使用正确的主进程地址
+export MASTER_ADDR=10.246.80.2
+export MASTER_PORT=8020
+export NCCL_IB_DISABLE=1
+export NCCL_P2P_DISABLE=1  
+export NCCL_NET_GDR_LEVEL=0
+export NCCL_SOCKET_IFNAME=eth0
 
 world_size=4
 vllm_world_size=4
@@ -148,11 +159,11 @@ if [ -f "${DPO_DS_PATH}${DS}_score.csv" ]; then
     echo "DPO score already exists, skipping score generation."
 else
     echo "Generating score for DPO dataset"
-    accelerate launch --config_file /home/feihm/llm-fei/ATM-RAG/fei-scripts/unsloth_reproduction/ds_configs/default_config.yaml \
+    accelerate launch --config_file /home/feihm/llm-fei/ATM-RAG/fei-scripts/unsloth_reproduction/ds_configs/ds_config_zero1.yaml \
         /home/feihm/llm-fei/ATM-RAG/atm_train/ppl_infer/ppl_infer_with_trainer_qwen.py \
         --model_name_or_path $GEN_MODEL_PATH \
         --input_file ${FAB_DS_PATH}${DS}.json \
-        --per_device_eval_batch_size 10 \
+        --per_device_eval_batch_size 64 \
         --num_procs 64 \
         --output ${DPO_DS_PATH}${DS}_score.csv
 
