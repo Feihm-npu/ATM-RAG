@@ -74,6 +74,7 @@ def parse_args():
     parser.add_argument("--world_size", default=2, type=int)
     parser.add_argument("--max_new_tokens", default=512, type=int)
     parser.add_argument("--dest_dir", required=True, type=str)
+    parser.add_argument("--num_proc", default=8, type=int)
     return parser.parse_args()
 
 def call_model_dup(prompts, model, max_new_tokens=512, num_dups=1):
@@ -98,7 +99,7 @@ if __name__ == '__main__':
     tokenizer = AutoTokenizer.from_pretrained(args.model_name)
 
     print("[+] Formatting dataset...")
-    ds = ds.map(lambda e: format_row(e, tokenizer), num_proc=8, remove_columns=ds.column_names, desc="Formatting rows")
+    ds = ds.map(lambda e: format_row(e, tokenizer), num_proc=args.num_proc, remove_columns=ds.column_names, desc="Formatting rows")
 
     print("[+] Loading model...")
     model = LLM(model=args.model_name, tensor_parallel_size=args.world_size, trust_remote_code=True, disable_custom_all_reduce=True)

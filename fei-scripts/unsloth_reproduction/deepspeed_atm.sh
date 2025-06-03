@@ -11,14 +11,16 @@ ORI_GEN_MODEL=Qwen/Qwen2.5-7B-Instruct
 DATASET_PATH=~/llm-fei/Data/NQ/contriever_nq_all_train/
 #DATASET_PATH=/home/feihm/llm-fei/zeming/GraphRAG/Data/datasets/ATM
 DS=train
-EXP_PATH=./ATM_RAG_0529
+EXP_PATH=./ATM_RAG_0603
+PRE_EXP=./pre_exp
+
 ADV_MODEL_PATH=${EXP_PATH}/adv_model/
 ADV_MODEL_VLLM_PATH=${EXP_PATH}/adv_model_vllm/
-GEN_MODEL_PATH=finetuned_model/
+GEN_MODEL_PATH=${PRE_EXP}/finetuned_model/
 GEN_MODEL_VLLM_PATH=${EXP_PATH}/gen_model_vllm/
 
-FAB_DS_PATH=fab_ds/
-SFT_DS_PATH=fab_sft/
+FAB_DS_PATH=${PRE_EXP}/fab_ds/
+SFT_DS_PATH=${PRE_EXP}/fab_sft/
 DPO_DS_PATH=${EXP_PATH}/fab_dpo/
 MITO_DS_PATH=${EXP_PATH}/fab_mito/
 
@@ -34,13 +36,13 @@ mkdir -p $DPO_DS_PATH
 mkdir -p $MITO_DS_PATH
 
 ## Training environment
-export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
+export CUDA_VISIBLE_DEVICES=2,3,4,5
 export OMP_NUM_THREADS=64
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 # This is added to solve the conflicts of the conflicts rooted from the combination: deepspeed + HF Transformers + PyTorch 2.2+
 export TORCH_DISTRIBUTED_DEFAULT_DTENSOR=0
 
-world_size=8
+world_size=4
 vllm_world_size=4
 ########### Step 0: Create initial fab dataset 
 
@@ -54,6 +56,8 @@ else
     python /home/feihm/llm-fei/ATM-RAG/fei-scripts/unsloth_reproduction/sF0_generator_fake.py \
         --model_name $ORI_ADV_MODEL \
         --world_size $vllm_world_size \
+        --max_new_tokens 512 \
+        --num_proc 64 \
         --ds_name ${DATASET_PATH}${DS}.json \
         --dest_dir ${FAB_DS_PATH}${DS}.csv
 
@@ -72,6 +76,7 @@ else
 
     python /home/feihm/llm-fei/ATM-RAG/atm_train/attacker_build_data/fab_merge.py \
         --ds_path ${DATASET_PATH}${DS}.json \
+        --num_proc 64 \
         --fab_path ${FAB_DS_PATH}${DS}.csv \
         --dest_dir ${FAB_DS_PATH}${DS}.json
 
@@ -84,7 +89,7 @@ fi
 
 echo "Step 0 completed!"
 echo "*********************************************************************************"
-
+exit 1
 ########### Step 1: This script is used for initial fine-tuning the generator, only need to be run once.
 
 echo "Step 1: Prepare dataset for SFT"
@@ -96,7 +101,7 @@ else
     echo "Data preparing"
     python /home/feihm/llm-fei/ATM-RAG/atm_train/generator_sft/generator_sft_data_prepare_qwen.py \
         --model_path $ORI_GEN_MODEL \
-        --data_path ${FAB_DS_PATH}${DS}.json \
+        --data_path ${DATASET_PATH}${DS}.json \
         --dst_path $SFT_DS_PATH
             # --data_path ${DATASET_PATH}${DS}.json \
     if [ ! -f "$SFT_DS_PATH/dataset_info.json" ]; then

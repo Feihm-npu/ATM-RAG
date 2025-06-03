@@ -41,7 +41,7 @@ mkdir -p $EVAL_MODEL_PATH
 ## Training environment
 export CUDA_VISIBLE_DEVICES=4,5,6,7
 export OMP_NUM_THREADS=64
-export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:False
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 world_size=4
 
 ########### Step 0: Create initial fab dataset 

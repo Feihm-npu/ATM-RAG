@@ -6,7 +6,8 @@ from transformers import (
     AutoModelForCausalLM, 
     TrainingArguments, 
     Trainer, 
-    DataCollatorForLanguageModeling
+    DataCollatorForLanguageModeling,
+    DataCollatorForSeq2Seq
 )
 from dataclasses import dataclass
 from typing import Any, Dict, List
@@ -17,22 +18,31 @@ from transformers.trainer_utils import is_main_process
 
 MAX_LENGTH = 2048
 
-def build_prompt_records(batch):
+
+
+
+def template_from_file(example):
     NUM_DUPS = 5
-    inputs, targets = [], []
-    for ex_idx in range(len(batch["question"])):
-        for ctx in batch["ctxs"][ex_idx][:NUM_DUPS]:
-            paragraph = f"[document] # Title: {ctx['title']} ## text: {ctx['text']} [/document]"
-            prompt = (
+    item = {}
+
+    item['answer'] = example['answers'][0]
+    item['question'] = example['question']
+
+    example['input'] = []
+    for ctx in example["ctxs"][:NUM_DUPS]:
+        paragraph = f"[document] # Title: {ctx['title']} ## text: {ctx['text']} [/document]"
+        prompt = (
                 "You are a helpful assistant. Below is a question and some retrieved documents (some may be irrelevant).\n"
                 "Use them to write a high-quality, concise, and accurate answer.\n\n"
                 "[Knowledge]\n"
                 f"{paragraph}\n"
-                f"Question: {batch['question'][ex_idx]}\n\nAnswer:\n"
+                f"Question: {item['question']}\n\nAnswer:\n"
             )
-            inputs.append(prompt)
-            targets.append(batch["answers"][ex_idx][0])
-    return {"input": inputs, "target": targets}
+        example['input'].append(prompt)
+
+    example['target'] = [example['answers'][0] for _ in range(NUM_DUPS)]
+    
+    return example
 
 
 class LossPerSampleTrainer(Trainer):
@@ -52,15 +62,27 @@ class LossPerSampleTrainer(Trainer):
 
 
 
-def tokenize(example, tokenizer):
-    enc = tokenizer(example["input"], truncation=True, max_length=MAX_LENGTH, add_special_tokens=False)
-    ans = tokenizer(example["target"], truncation=True, max_length=MAX_LENGTH//4, add_special_tokens=False)
-    input_ids = enc["input_ids"] + ans["input_ids"] + [tokenizer.eos_token_id]
-    input_ids = input_ids[:MAX_LENGTH]
-    attention_mask = [1] * len(input_ids)
-    labels = [-100]*len(enc["input_ids"]) + ans["input_ids"] + [tokenizer.eos_token_id]
-    labels = labels[:len(input_ids)]
-    return {"input_ids": input_ids, "attention_mask": attention_mask, "labels": labels}
+def format_tokenize_row(example, tokenizer):
+    assert tokenizer.padding_side == 'left'
+    input_ = example['input'][0]
+    target = example['target'][0]
+
+
+    encs = tokenizer(input_, padding=True, add_special_tokens=False)
+    example['input_ids'] = encs['input_ids']
+    example['attention_mask'] = encs['attention_mask']
+    
+    ans_encs = tokenizer(target, add_special_tokens=False)
+    
+    example['labels'] = [[-100] * len(row_enc) for row_enc in example['input_ids']]
+    
+
+    for idx, item in enumerate(example['labels']):
+        example['input_ids'][idx] += (ans_encs['input_ids'][idx] + [tokenizer.eos_token_id])
+        example['labels'][idx] += (ans_encs['input_ids'][idx] + [tokenizer.eos_token_id])
+        example['attention_mask'][idx] += [1] * len(ans_encs['input_ids'][idx] + [tokenizer.eos_token_id])
+        assert len(example['input_ids'][idx]) == len(example['labels'][idx])
+        assert len(example['attention_mask'][idx]) == len(example['labels'][idx])
 
 
 
@@ -69,6 +91,7 @@ def parse_args():
     p.add_argument("--model_name_or_path", required=True)
     p.add_argument("--input_file", required=True)
     p.add_argument("--per_device_eval_batch_size", type=int, default=1)
+    p.add_argument("--num_procs", type=int, default=8)
     p.add_argument("--num_dups", type=int, default=5)
     p.add_argument("--output", required=True)
     return p.parse_args()
@@ -80,33 +103,15 @@ def main():
     tokenizer.pad_token = tokenizer.eos_token
     tokenizer.padding_side = "left"
     model = AutoModelForCausalLM.from_pretrained(args.model_name_or_path, torch_dtype=torch.bfloat16)
-
+    ds = load_dataset("json", data_files=args.input_file, split="train")
     # 1) 处理成一条一条 prompt
     with accelerator.main_process_first():
-        raw_ds = load_dataset("json", data_files=args.input_file, split="train")
-        flat_ds = raw_ds.map(build_prompt_records, batched=True, remove_columns=raw_ds.column_names)
-        proc_ds = flat_ds.map(lambda ex: tokenize(ex, tokenizer), batched=False, remove_columns=flat_ds.column_names)
-        print(f'args.num_dups: {args.num_dups}')
-        print(f'proc_ds: {proc_ds}')
+        ds = ds.map(template_from_file, num_proc=args.num_proc, remove_columns=ds.column_names)
+        ds = ds.map(format_tokenize_row, fn_kwargs={'tokenizer': tokenizer}, num_proc=args.num_proc, remove_columns=ds.column_names, batched=True, batch_size=1)
+        print(ds)
     # return
     # 2) Trainer + DataCollator
-    @dataclass
-    class DataCollatorWithLabelPad:
-        tokenizer: Any
-        pad_to_multiple_of: int = 8
-        def __call__(self, features: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
-            labels = [f.pop("labels") for f in features]
-            batch = self.tokenizer.pad(
-                features,
-                padding=True,
-                pad_to_multiple_of=self.pad_to_multiple_of,
-                return_tensors="pt",
-            )
-            max_len = batch["input_ids"].shape[1]
-            for i, l in enumerate(labels):
-                labels[i] = l + [-100]*(max_len - len(l))
-            batch["labels"] = torch.tensor(labels, dtype=torch.long)
-            return batch
+
 
     training_args = TrainingArguments(
         output_dir="./eval_outdir",
@@ -118,16 +123,16 @@ def main():
     trainer = LossPerSampleTrainer(
         model=model,
         args=training_args,
-        data_collator=DataCollatorWithLabelPad(tokenizer, pad_to_multiple_of=8),
+        data_collator=DataCollatorForSeq2Seq(tokenizer, pad_to_multiple_of=8),
         tokenizer=tokenizer,
-        eval_dataset=proc_ds,
+        eval_dataset=ds,
     )
 
-    results = trainer.predict(proc_ds)
+    results = trainer.predict(ds)
     accelerator.wait_for_everyone()
 
 
-    pred = results.predictions[:proc_ds.num_rows].reshape((-1, args.num_dups))
+    pred = results.predictions[:ds.num_rows].reshape((-1, args.num_dups))
     # ppl_per_sample = np.exp(predictions)
     if trainer.is_world_process_zero():
         odf = pd.DataFrame(pred, columns=[f'output_{idx}' for idx in range(args.num_dups)])

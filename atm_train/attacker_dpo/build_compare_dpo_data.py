@@ -79,7 +79,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Finetune a transformers model on a causal language modeling task")
     parser.add_argument("--input_score", type=str)
     parser.add_argument("--input_docs", type=str)
-    parser.add_argument("--model_name", default='unsloth/Qwen2.5-7B-Instruct', type=str)
+    parser.add_argument("--model_name", default='Qwen/Qwen2.5-7B-Instruct', type=str)
     parser.add_argument("--ds_name", default='nq-train', type=str)
 
     parser.add_argument("--output", required=True, type=str)

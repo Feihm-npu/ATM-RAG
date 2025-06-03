@@ -55,7 +55,7 @@ def process_data(example):
 
     combined_ctxs = ctxs_true + ctxs_false
     combined_ctxs = combined_ctxs[:10]
-
+    random.shuffle(combined_ctxs)
     formatted_docs = [
         f"[document] {paragraph_template.format(title=ctx['title'], text=ctx['text']).strip()} [/document]"
         for ctx in combined_ctxs

@@ -60,6 +60,7 @@ def parse_args():
     parser.add_argument("--ds_path", default='nq-train', type=str)
     parser.add_argument("--fab_path", default='generated_outputs.csv', type=str)
     parser.add_argument("--num_dups", default=5, type=int)
+    parser.add_argument("--num_procs", default=8, type=int)
     parser.add_argument("--epoch_suffix", default=0, type=int)
     parser.add_argument("--dest_dir", required=True, type=str)
     return parser.parse_args()
@@ -76,7 +77,7 @@ if __name__ == '__main__':
     for idx in range(args.num_dups):
         outputs = fab_df[f'output_{idx}'].astype(str).tolist()
         ads = Dataset.from_dict({'output': outputs})
-        nads.append(ads.map(extract_feat, num_proc=8, remove_columns=ads.column_names))
+        nads.append(ads.map(extract_feat, num_proc=args.num_proc, remove_columns=ads.column_names))
 
     rds = rds.to_list()
 
@@ -89,6 +90,7 @@ if __name__ == '__main__':
                 "score": '2',
                 'hasanswer': True,
             }
+            # The fake document is inserted at the head position.
             rds[idx].setdefault('ctxs', []).insert(0, insert_item)
 
     rds = Dataset.from_list(rds)
