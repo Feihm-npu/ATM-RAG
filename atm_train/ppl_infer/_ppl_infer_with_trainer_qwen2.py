@@ -366,9 +366,9 @@ def main():
     model = AutoModelForCausalLM.from_pretrained(
         args.model_name_or_path,
         torch_dtype=compute_dtype,
-        trust_remote_code=True,
+        trust_remote_code=True
     )
-    # model = model.to(accelerator.device)
+    
     # 设置为评估模式
     model.eval()
     
@@ -396,13 +396,13 @@ def main():
         )
         
         # 过滤掉没有contexts的样本
-        # ds = ds.filter(lambda x: len(x['input']) > 0)
+        ds = ds.filter(lambda x: len(x['input']) > 0)
         
         # Step 2: Tokenization
         ds = ds.map(
             lambda x: format_tokenize_row(x, tokenizer),
+            num_proc=1,  # tokenizer不要并行
             remove_columns=ds.column_names,
-            num_proc=args.num_procs,
             desc="Tokenizing"
         )
         
@@ -413,7 +413,6 @@ def main():
             batched=True,
             batch_size=1000,
             remove_columns=ds.column_names,
-            num_proc=args.num_procs,
             desc="Flattening dataset"
         )
         

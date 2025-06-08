@@ -52,7 +52,7 @@ def main():
         torch_dtype=torch.bfloat16 if args.bf16 else torch.float16,
     )
     tokenizer = AutoTokenizer.from_pretrained(args.model_name_or_path,padding=True, truncation=True)
-    tokenizer.pad_token = tokenizer.eos_token
+    # tokenizer.pad_token = tokenizer.eos_token
     tokenizer.padding_side = "left"
 
     try:

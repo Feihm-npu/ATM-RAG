@@ -133,13 +133,13 @@ def main():
         torch_dtype=torch.bfloat16,
     )
 
-    ref_model = pretrained_model_name_or_path=args.ref_model
+    ref_model = args.ref_model
     ref_model_kwargs = dict(
         attn_implementation="flash_attention_2",
         torch_dtype=torch.bfloat16,
     )
     tokenizer = AutoTokenizer.from_pretrained(pretrained_model_name_or_path=args.model_name)
-    tokenizer.pad_token = tokenizer.eos_token
+    # tokenizer.pad_token = tokenizer.eos_token
     tokenizer.padding_side = "left"
 
     raw_dataset = load_dataset("json", data_files=f'{args.train_file}', split="train")

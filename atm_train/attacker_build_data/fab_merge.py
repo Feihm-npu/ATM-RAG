@@ -77,7 +77,7 @@ if __name__ == '__main__':
     for idx in range(args.num_dups):
         outputs = fab_df[f'output_{idx}'].astype(str).tolist()
         ads = Dataset.from_dict({'output': outputs})
-        nads.append(ads.map(extract_feat, num_proc=args.num_proc, remove_columns=ads.column_names))
+        nads.append(ads.map(extract_feat, num_proc=args.num_procs, remove_columns=ads.column_names))
 
     rds = rds.to_list()
 

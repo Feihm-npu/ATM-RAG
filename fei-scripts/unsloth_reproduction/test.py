@@ -1,93 +1,18 @@
-from datasets import load_dataset
-from trl import DPOConfig, DPOTrainer, LogCompletionsCallback
-from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig, Trainer, TrainerCallback
-from typing import Optional
-import torch
-import wandb
-from trl.models.utils import unwrap_model_for_generation
+from transformers import AutoModelForCausalLM, AutoConfig
+import os
 
+model_dir = "./ATM_RAG_0603/adv_model"  # 你的保存路径
 
+model = AutoModelForCausalLM.from_pretrained(model_dir)
+config = AutoConfig.from_pretrained(model_dir)
 
-class LogCompletionsLengthCallback(TrainerCallback):
-    def __init__(self, trainer: Trainer, num_prompts: Optional[int] = None, freq: Optional[int] = None):
-        self.trainer = trainer
-        self.freq = freq
-        self._last_logged_step = -1
-        self.eval_dataset = self.trainer.eval_dataset
-        self.eval_dataset = self.eval_dataset.select(range(num_prompts))
+vocab_from_weights = model.get_input_embeddings().weight.shape[0]
+vocab_from_config = config.vocab_size
 
-    def on_step_end(self, args, state, control, **kwargs):
-        # Only log once per step (this method may be called multiple times)
-        if state.global_step == self._last_logged_step:
-            return
+print(f"🔍 权重中的 vocab size（embedding 行数）: {vocab_from_weights}")
+print(f"📄 config.json 中的 vocab size:         {vocab_from_config}")
 
-        # Only log every `freq` steps (if no `freq` is provided, log every `eval_steps` steps)
-        freq = self.freq or state.eval_steps
-        if state.global_step % freq != 0:
-            return
-
-        tokenizer = kwargs["processing_class"]
-        tokenizer.padding_side = "left"
-        accelerator = self.trainer.accelerator
-        model = self.trainer.model_wrapped
-        completion_lens = []
-        with accelerator.split_between_processes(self.eval_dataset["prompt_input_ids"]) as prompts:
-            with unwrap_model_for_generation(model, accelerator) as unwrapped_model:
-                for prompt_ids in prompts:
-                    prompt_ids = torch.tensor([prompt_ids], device=unwrapped_model.device)
-                    generations = unwrapped_model.generate(
-                        prompt_ids, generation_config=GenerationConfig(max_new_tokens=100)
-                    )
-                    completion_lens.append(len(generations[0]) - len(prompt_ids[0]))
-
-        # Build the data to log
-        if self.trainer.accelerator.is_main_process:
-            wandb.log({"completions_len": sum(completion_lens) / len(completion_lens)}, step=state.global_step)
-
-        # Save the last logged step, so we don't log the same completions multiple times
-        self._last_logged_step = state.global_step
-
-
-def main():
-    gpu_stats = torch.cuda.get_device_properties(0)
-    start_gpu_memory = round(torch.cuda.max_memory_reserved() / 1024 / 1024 / 1024, 3)
-    max_memory = round(gpu_stats.total_memory / 1024 / 1024 / 1024, 3)
-    print(f"GPU = {gpu_stats.name}. Max memory = {max_memory} GB.")
-    print(f"{start_gpu_memory} GB of memory reserved.")
-
-    model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
-    tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
-    dataset = load_dataset("ZSvedic/gpt4o-arena-brevity-dpo")
-    dataset["test"] = dataset["test"].select(range(20))
-
-    def make_conv(example):
-        return {
-            "prompt": [{"role": "user", "content": example["prompt"]}],
-            "chosen": [{"role": "assistant", "content": example["chosen"]}],
-            "rejected": [{"role": "assistant", "content": example["rejected"]}],
-        }
-
-    dataset = dataset.map(make_conv)
-
-    training_args = DPOConfig(
-        output_dir="Qwen2-0.5B-DPO",
-        logging_steps=5,
-        eval_steps=5,
-        eval_strategy="steps",
-        gradient_accumulation_steps=8,
-    )
-
-    trainer = DPOTrainer(
-        model=model,
-        args=training_args,
-        processing_class=tokenizer,
-        train_dataset=dataset["train"],
-        eval_dataset=dataset["test"],
-    )
-    # callback = LogCompletionsCallback(trainer, num_prompts=16)
-    # trainer.add_callback(callback)
-    trainer.train()
-
-
-if __name__ == "__main__":
-    main()
+if vocab_from_weights != vocab_from_config:
+    print("❌ vocab_size 不一致，会导致 vLLM 报错！")
+else:
+    print("✅ vocab_size 一致，理论上 vLLM 可正常加载。")

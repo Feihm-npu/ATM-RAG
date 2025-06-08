@@ -40,18 +40,6 @@ export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 export OMP_NUM_THREADS=64
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 # This is added to solve the conflicts of the conflicts rooted from the combination: deepspeed + HF Transformers + PyTorch 2.2+
-export TORCH_DISTRIBUTED_DEFAULT_DTENSOR=0
-export NCCL_SOCKET_IFNAME=eth0
-export NCCL_INCLUDE_SUBNET=10.246.80.0/24  # 强制使用宿主机网段
-export NCCL_EXCLUDE_SUBNET=10.98.0.0/16,10.89.0.0/16  # 排除容器网段
-
-# 确保PyTorch使用正确的主进程地址
-export MASTER_ADDR=10.246.80.2
-export MASTER_PORT=8020
-export NCCL_IB_DISABLE=1
-export NCCL_P2P_DISABLE=1  
-export NCCL_NET_GDR_LEVEL=0
-export NCCL_SOCKET_IFNAME=eth0
 
 world_size=4
 vllm_world_size=4
@@ -64,11 +52,11 @@ if [ -f "${FAB_DS_PATH}${DS}.csv" ]; then
     echo "First part (FAB CSV) already exists, skipping."
 else
     echo "First part started!"
-    python /home/feihm/llm-fei/ATM-RAG/fei-scripts/unsloth_reproduction/sF0_generator_fake.py \
+    PYTORCH_CUDA_ALLOC_CONF=expandable_segments:False python /home/feihm/llm-fei/ATM-RAG/fei-scripts/unsloth_reproduction/sF0_generator_fake.py \
         --model_name $ORI_ADV_MODEL \
         --world_size $vllm_world_size \
         --max_new_tokens 512 \
-        --num_proc 64 \
+        --num_proc 16 \
         --ds_name ${DATASET_PATH}${DS}.json \
         --dest_dir ${FAB_DS_PATH}${DS}.csv
 
@@ -87,7 +75,7 @@ else
 
     python /home/feihm/llm-fei/ATM-RAG/atm_train/attacker_build_data/fab_merge.py \
         --ds_path ${DATASET_PATH}${DS}.json \
-        --num_proc 64 \
+        --num_proc 32 \
         --fab_path ${FAB_DS_PATH}${DS}.csv \
         --dest_dir ${FAB_DS_PATH}${DS}.json
 
@@ -159,12 +147,14 @@ if [ -f "${DPO_DS_PATH}${DS}_score.csv" ]; then
     echo "DPO score already exists, skipping score generation."
 else
     echo "Generating score for DPO dataset"
-    accelerate launch --config_file /home/feihm/llm-fei/ATM-RAG/fei-scripts/unsloth_reproduction/ds_configs/ds_config_zero1.yaml \
+    accelerate launch --config_file /home/feihm/llm-fei/ATM-RAG/fei-scripts/unsloth_reproduction/ds_configs/ds_config_zero3_ppl.yaml \
         /home/feihm/llm-fei/ATM-RAG/atm_train/ppl_infer/ppl_infer_with_trainer_qwen.py \
         --model_name_or_path $GEN_MODEL_PATH \
         --input_file ${FAB_DS_PATH}${DS}.json \
-        --per_device_eval_batch_size 64 \
-        --num_procs 64 \
+        --per_device_eval_batch_size 80 \
+        --dataloader_num_workers 8 \
+        --num_procs 16 \
+        --bf16 \
         --output ${DPO_DS_PATH}${DS}_score.csv
 
     if [ ! -f "${DPO_DS_PATH}${DS}_score.csv" ]; then
@@ -173,7 +163,7 @@ else
     fi
     echo "Score collected"
 fi
-exit 1
+
 # Part 2: Build pairwise data for DPO
 if [ -f "${DPO_DS_PATH}${DS}_dpo.json" ]; then
     echo "DPO dataset already exists, skipping pairwise data generation."
@@ -183,7 +173,6 @@ else
         --input_score ${DPO_DS_PATH}${DS}_score.csv \
         --input_docs ${FAB_DS_PATH}${DS}.csv \
         --ds_name ${FAB_DS_PATH}${DS}.json \
-        --num_procs 64 \
         --output ${DPO_DS_PATH}${DS}_dpo.json
 
     if [ ! -f "${DPO_DS_PATH}${DS}_dpo.json" ]; then
@@ -209,7 +198,7 @@ else
       --ref_model $ORI_GEN_MODEL \
       --train_file ${DPO_DS_PATH}${DS}_dpo.json \
       --per_device_train_batch_size 2 \
-      --max_steps 100 \
+      --max_steps 1 \
       --gradient_accumulation_steps 1 \
       --output_dir $ADV_MODEL_PATH \
       --wandb_project unsloth-s3-attacker-dpo \
@@ -234,9 +223,11 @@ if [ -f "${MITO_DS_PATH}${DS}.csv" ]; then
     echo "First part (DPO CSV) already exists, skipping."
 else
     echo "First part started!"
-    python /home/feihm/llm-fei/ATM-RAG/fei-scripts/unsloth_reproduction/sF0_generator_fake.py \
+    PYTORCH_CUDA_ALLOC_CONF=expandable_segments:False python /home/feihm/llm-fei/ATM-RAG/fei-scripts/unsloth_reproduction/sF0_generator_fake_opt.py \
         --model_name $ADV_MODEL_PATH \
         --world_size $world_size \
+        --max_new_tokens 512 \
+        --num_proc 16 \
         --ds_name ${DATASET_PATH}${DS}.json \
         --dest_dir ${MITO_DS_PATH}${DS}.csv
 
@@ -263,6 +254,7 @@ else
     python /home/feihm/llm-fei/ATM-RAG/atm_train/attacker_build_data/fab_merge.py \
         --ds_path ${DATASET_PATH}${DS}.json \
         --fab_path ${MITO_DS_PATH}${DS}.csv \
+        --num_procs 32 \
         --dest_dir ${MITO_DS_PATH}${DS}.json
 
     if [ ! -f "${MITO_DS_PATH}${DS}.json" ]; then
@@ -288,7 +280,7 @@ fi
 
 
 echo "Step 4 completed!"
-# exit 1
+
 ########### Step 5: This script is used for MITO training the generator.
 
 echo "Step 5: MITO training the generator"

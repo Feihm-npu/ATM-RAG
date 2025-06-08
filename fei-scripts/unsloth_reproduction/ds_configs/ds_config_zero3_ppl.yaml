@@ -1,0 +1,23 @@
+compute_environment: LOCAL_MACHINE
+debug: false
+deepspeed_config:
+  deepspeed_config:
+  zero_stage: 3
+  stage3_max_live_parameters: 5e9  # 5B参数 ≈ 10GB
+  stage3_max_reuse_distance: 5e9   # 匹配上面
+  stage3_prefetch_bucket_size: 2e9  # 2GB，默认的4倍
+  stage3_param_persistence_threshold: 1e8  # 100M参数，更激进
+  stage3_gather_16bit_weights_on_model_save: false  # 推理不需要
+  zero3_save_16bit_model: false  # 推理不需要
+distributed_type: DEEPSPEED
+downcast_bf16: 'no'
+machine_rank: 0
+main_training_function: main
+num_machines: 1
+num_processes: 8
+rdzv_backend: static
+same_network: true
+tpu_env: []
+tpu_use_cluster: false
+tpu_use_sudo: false
+use_cpu: false
