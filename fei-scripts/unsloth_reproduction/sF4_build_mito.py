@@ -18,7 +18,24 @@ Please analyze the documents carefully and provide a high-quality, concise, and 
 [Question]
 {question}
 
-Please provide your answer based on the documents above:"""
+Answer the following question with a very short phrase, such as `2024`, `Nov 19th,2021`, or `Arsène Wenger`, to meet the criteria of exact match datasets."""
+
+def split_ctxs(example):
+    ctxs_true = []
+    ctxs_false = []
+    for ctx in example['ctxs']:
+        if ctx.get('hasanswer', False):
+            ctxs_true.append(ctx)
+        else:
+            ctxs_false.append(ctx)
+    hasanswer = len(ctxs_true) > 0
+    return {
+        'question': example['question'],
+        'answers': example['answers'],
+        'ctxs_true': ctxs_true,
+        'ctxs_false': ctxs_false,
+        'hasanswer': hasanswer,
+    }
 
 def format_docs_to_str(doc_list_of_dicts: list[dict]) -> str:
     """
@@ -130,6 +147,8 @@ def build_mito_dataset(source_path: str, dest_path: str, tokenizer: AutoTokenize
 
         # 3. 构建被攻击文档列表 D' (attacked_docs_dicts)
         combined_for_attack_dicts = original_docs_dicts + fabrication_docs_dicts
+        num_atk_d = min(len(combined_for_attack_dicts),10)
+        combined_for_attack_dicts = combined_for_attack_dicts[:num_atk_d]
         random.shuffle(combined_for_attack_dicts) 
         attacked_docs_dicts = combined_for_attack_dicts
 

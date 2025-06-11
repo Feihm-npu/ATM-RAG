@@ -36,7 +36,7 @@ mkdir -p $DPO_DS_PATH
 mkdir -p $MITO_DS_PATH
 
 ## Training environment
-export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
+export CUDA_VISIBLE_DEVICES=0,1,2,3,4
 export OMP_NUM_THREADS=64
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 # This is added to solve the conflicts of the conflicts rooted from the combination: deepspeed + HF Transformers + PyTorch 2.2+
@@ -298,13 +298,14 @@ echo "Step 5: MITO training the generator"
 #     --num_train_epochs 1 \
 #     --output_dir $GEN_MODEL_PATH 
 
-# multiple gpus
+# multiple gpus CUDA_VISIBLE_DEVICES=0 python mito_ds.py \
+
+# CUDA_VISIBLE_DEVICES=0 python mito_ds.py \
 accelerate launch --config_file ds_configs/default_config.yaml mito_ds.py \
     --model_name $GEN_MODEL_PATH \
     --dataset_name ${MITO_DS_PATH}${DS}_mito.json  \
-    --batch_size 10 \
-    --max_steps 100 \
-    --num_train_epochs 1 \
+    --batch_size 1 \
+    --max_steps 10 \
     --output_dir $GEN_MODEL_PATH  
 
 

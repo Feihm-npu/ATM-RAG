@@ -39,17 +39,22 @@ def main():
     parser.add_argument('--num_train_epochs', type=int, default=3, help='Number of training epochs')
     parser.add_argument('--max_steps', type=int, default=100, help='Maximum number of training steps (overrides num_train_epochs if > 0)')
     parser.add_argument('--output_dir', type=str, required=True, help='Output directory for saved model and logs')
-    parser.add_argument('--learning_rate', type=float, default=5e-5, help='Learning rate')
+    parser.add_argument('--learning_rate', type=float, default=1e-5, help='Learning rate')
     parser.add_argument('--lr_scheduler_type', type=str, default="cosine", help='Learning rate scheduler type')
     parser.add_argument('--warmup_ratio', type=float, default=0.1, help='Warmup ratio for learning rate scheduler')
     parser.add_argument('--weight_decay', type=float, default=0.01, help='Weight decay')
     parser.add_argument('--beta_mito', type=float, default=0.1, help='Beta (alpha) for the KL term in MITO loss')
     parser.add_argument('--max_seq_length_config', type=int, default=2048, help='Max sequence length for model loading (Unsloth FastLanguageModel)')
-    parser.add_argument('--dpo_max_length', type=int, default=1024, help='Max total length for D+a sequences in DPOConfig')
-    parser.add_argument('--dpo_max_prompt_length', type=int, default=512, help='Max length for answer (a) in DPOConfig (used by tokenize_row)')
+    parser.add_argument('--dpo_max_length', type=int, default=2048, help='Max total length for D+a sequences in DPOConfig')
+    parser.add_argument('--dpo_max_prompt_length', type=int, default=1024, help='Max length for answer (a) in DPOConfig (used by tokenize_row)')
     parser.add_argument('--dpo_max_completion_length', type=int, default=512, help='Max length for contexts (D, D_prime) in DPOConfig (used by tokenize_row)')
     parser.add_argument('--logging_steps', type=int, default=1, help='Log every N steps')
     parser.add_argument('--gradient_accumulation_steps', type=int, default=8, help='Gradient accumulation steps')
+    ## early stopping and evaluation settings
+    parser.add_argument('--evaluation_strategy', type=str, default="steps", help='Evaluation strategy ("steps" or "epoch")')
+    parser.add_argument('--eval_steps', type=int, default=50, help='Evaluate every N steps. Crucial for early stopping.')
+    parser.add_argument('--early_stopping_patience', type=int, default=3, help='Stop training if eval_loss does not improve for N evaluations.')
+    parser.add_argument('--save_total_limit', type=int, default=2, help='Limit the total amount of checkpoints. Deletes the older checkpoints.')
     # Add any other arguments your script might need
 
     args = parser.parse_args()
@@ -114,6 +119,17 @@ def main():
         model_init_kwargs=model_kwargs,
         per_device_train_batch_size=args.batch_size,
         # gradient_accumulation_steps=args.gradient_accumulation_steps,
+        ## evaluation ###########
+        evaluation_strategy=args.evaluation_strategy,
+        eval_steps=args.eval_steps,
+        save_strategy=args.evaluation_strategy, # 保存策略与评估策略对齐
+        save_steps=args.eval_steps,
+        load_best_model_at_end=True, # 关键！训练结束后加载最佳模型
+        metric_for_best_model="eval_loss", # 使用评估损失作为衡量标准
+        greater_is_better=False, # 损失越小越好
+        save_total_limit=args.save_total_limit,
+        ####################
+
         warmup_ratio=args.warmup_ratio,
         fp16=False,
         bf16=True,
@@ -131,14 +147,14 @@ def main():
         
         # MITO/DPO specific parameters
         beta=args.beta_mito,
-        
+        truncation_mode="keep_end",  
         max_length=args.dpo_max_length,
         max_prompt_length=args.dpo_max_prompt_length,
         gradient_checkpointing=True,
         # max_completion_length=args.dpo_max_completion_length,
         dataset_num_proc=32,
         remove_unused_columns=False,
-        sft_on_d_prime=False, # Assuming this is a custom arg for MITOConfig
+        sft_on_d_prime=True, # Assuming this is a custom arg for MITOConfig
         # report_to="wandb", # If you use wandb, configure it in TrainingArguments
         #gradient_checkpointing=True, # Consider for large models to save memory
     )
@@ -152,10 +168,8 @@ def main():
         train_dataset=train_dataset,
         eval_dataset=train_dataset, # Replace with a proper validation set if available
         processing_class=tokenizer, # Pass the tokenizer here (standard for DPOTrainer)
-                             # Original code had 'processing_class=tokenizer'. Adjusted to 'tokenizer'.
-                             # If your minimal_MITOTrainer specifically needs 'processing_class', revert this.
         # data_collator=None, # Defaults to DataCollatorForPreference, which should be fine
-        
+        callbacks=[EarlyStoppingCallback(early_stopping_patience=args.early_stopping_patience)],
         # mito_alpha=args.beta_mito
     )
     logger.info("minimal_MITOTrainer initialized.")

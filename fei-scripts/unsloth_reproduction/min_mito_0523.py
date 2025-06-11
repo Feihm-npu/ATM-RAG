@@ -109,360 +109,246 @@ class MITOConfig(DPOConfig):
     })
     # You can add other MITO-specific parameters here if needed
 
+# -----------------------------------------------------------------------------
+# Trainer ----------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 
 class minimal_MITOTrainer(DPOTrainer):
-    def __init__(self, 
-                 model: Optional[Union[PreTrainedModel, nn.Module, str]] = None,
-                 ref_model: Optional[Union[PreTrainedModel, nn.Module, str]] = None, 
-                 args: Optional[DPOConfig] = None, 
-                 **kwargs 
-                ):
-        super().__init__(model=model, ref_model=ref_model, args=args, **kwargs)
-        
-        self.mito_alpha = getattr(self.args, "mito_alpha", self.args.beta) 
-        if self.mito_alpha is None:
-            print(f'Setting self.mito_alpha to 0.1')
-            self.mito_alpha = 0.1
-        if not hasattr(self.args, "mito_alpha") and self.is_world_process_zero():
-            warnings.warn(
-                f"`mito_alpha` not found in DPOConfig, using `beta` ({self.args.beta}) from DPOConfig instead. "
-                f"Set `mito_alpha` in DPOConfig for explicit control."
-            )
-        
+    """Minimal, syntax‑correct MITO implementation re‑using TRL internals."""
+
+    # ---------------------------------------------------------------------
+    # Init -----------------------------------------------------------------
+    def __init__(self, *args, **kw):
+        super().__init__(*args, **kw)
+        self.mito_alpha = getattr(self.args, "mito_alpha", None) or self.args.beta
         self.sft_on_d_prime = getattr(self.args, "sft_on_d_prime", False)
+        self.kldiv_loss = nn.KLDivLoss(reduction='batchmean')
+        self.ce_loss = nn.CrossEntropyLoss(ignore_index=-100)  # 修复：使用标准的ignore_index
         if self.is_world_process_zero():
-            if hasattr(self.args, "sft_on_d_prime"):
-                sft_path_info = "D' (rejected/adv_prompt path)" if self.sft_on_d_prime else "D (chosen/prompt path)"
-                print(f"MITO SFT loss will be calculated on {sft_path_info} (sft_on_d_prime={self.sft_on_d_prime})")
-            else:
-                warnings.warn(
-                    f"`sft_on_d_prime` not found in DPOConfig (self.args). Defaulting to True (SFT on D'). "
-                    f"To control this, add `sft_on_d_prime: bool` to your DPOConfig or training arguments."
-                )
+            which = "D'" if self.sft_on_d_prime else "D"
+            print(f"[MITO] mito_alpha={self.mito_alpha} | SFT on {which} path")
 
-
+    # ---------------------------------------------------------------------
+    # Tokenise one row ------------------------------------------------------
+    # ---------------------------------------------------------------------
     @staticmethod
     def tokenize_row(
-        features: Dict[str, str], 
-        processing_class: PreTrainedTokenizerBase, 
-        max_prompt_length: int, 
-        max_completion_length: int, 
-        add_special_tokens: bool = False 
+        features: Dict[str, str],
+        processing_class: PreTrainedTokenizerBase,
+        max_prompt_length: Optional[int],
+        max_completion_length: Optional[int],
+        add_special_tokens: bool = False,
     ) -> Dict[str, List[int]]:
-        tokenizer = processing_class
+        tok = processing_class  # must be provided by TRL
 
-        answer_token_ids = tokenizer(features["prompt"], add_special_tokens=False, truncation=False)["input_ids"]
-        if max_prompt_length is not None:
-            if len(answer_token_ids) > max_prompt_length -1: 
-                 answer_token_ids = answer_token_ids[:max_prompt_length -1]
-        answer_tokens = answer_token_ids + [tokenizer.eos_token_id]
+        # Answer a ---------------------------------------------------------
+        ans_ids = tok(features["prompt"], add_special_tokens=False)["input_ids"]
+        ## NOT truncate the answer.
+        # if max_prompt_length and len(ans_ids) > max_prompt_length - 1:
+        #     ans_ids = ans_ids[: max_prompt_length - 1]
+        ans_ids.append(tok.eos_token_id)
 
-        context_d_tokens = tokenizer(features["chosen"], add_special_tokens=False, truncation=False)["input_ids"]
-        if max_completion_length is not None: 
-            context_d_tokens = context_d_tokens[:max_completion_length]
+        # Contexts ---------------------------------------------------------
+        def _ctx(text: str):
+            ids = tok(text, add_special_tokens=False)["input_ids"]
+            # leave *one* token slack so answer is never pushed out by flush_left/keep_end
+            if max_prompt_length and len(ids) >= max_prompt_length:
+                ids = ids[-(max_prompt_length - 1):]
+            return ids
 
-        context_d_prime_tokens = tokenizer(features["rejected"], add_special_tokens=False, truncation=False)["input_ids"]
-        if max_completion_length is not None: 
-            context_d_prime_tokens = context_d_prime_tokens[:max_completion_length]
-            
+        ctx_D = _ctx(features["chosen"])      # original docs
+        ctx_Dp = _ctx(features["rejected"])   # attacked docs
+
         return {
-            "prompt_input_ids": answer_tokens, 
-            "prompt_attention_mask": [1] * len(answer_tokens),
-            "chosen_input_ids": context_d_tokens, 
-            "chosen_attention_mask": [1] * len(context_d_tokens),
-            "rejected_input_ids": context_d_prime_tokens, 
-            "rejected_attention_mask": [1] * len(context_d_prime_tokens),
+            "prompt_input_ids": ans_ids,
+            "prompt_attention_mask": [1] * len(ans_ids),
+            "chosen_input_ids": ctx_D,
+            "chosen_attention_mask": [1] * len(ctx_D),
+            "rejected_input_ids": ctx_Dp,
+            "rejected_attention_mask": [1] * len(ctx_Dp),
         }
 
-
+    # ---------------------------------------------------------------------
+    # Concatenation helpers ------------------------------------------------
+    # ---------------------------------------------------------------------
     @staticmethod
-    def concatenated_inputs(
-        batch: Dict[str, torch.LongTensor], 
-        padding_value: int,
-    ) -> Dict[str, torch.LongTensor]:
-        output = {}
-        contexts_d = batch["chosen_input_ids"]
-        contexts_d_prime = batch["rejected_input_ids"]
-        contexts_d_mask = batch["chosen_attention_mask"]
-        contexts_d_prime_mask = batch["rejected_attention_mask"]
-        answer_ids = batch["prompt_input_ids"] 
-        answer_mask = batch["prompt_attention_mask"]
+    def concatenated_inputs(batch: Dict[str, torch.Tensor], pad_val: int):
+        out: Dict[str, torch.Tensor] = {}
+        cd, cdp = batch["chosen_input_ids"], batch["rejected_input_ids"]
+        md, mdp = batch["chosen_attention_mask"], batch["rejected_attention_mask"]
+        # ans, ans_mask = batch["prompt_input_ids"], batch["prompt_attention_mask"]
 
-        max_context_len = max(contexts_d.shape[1], contexts_d_prime.shape[1])
-        output["prompt_input_ids"] = torch.cat(
-            (
-                pad_to_length_left(contexts_d, max_context_len, pad_value=padding_value, dim=1),
-                pad_to_length_left(contexts_d_prime, max_context_len, pad_value=padding_value, dim=1),
-            ),
-            dim=0,
-        )
-        output["prompt_attention_mask"] = torch.cat(
-            (
-                pad_to_length_left(contexts_d_mask, max_context_len, pad_value=0, dim=1),
-                pad_to_length_left(contexts_d_prime_mask, max_context_len, pad_value=0, dim=1),
-            ),
-            dim=0,
-        )
+        Lc = max(cd.shape[1], cdp.shape[1])
+        out["prompt_input_ids"] = torch.cat([
+            pad_to_length_left(cd, Lc, pad_val, 1),
+            pad_to_length_left(cdp, Lc, pad_val, 1),
+        ])
+        out["prompt_attention_mask"] = torch.cat([
+            pad_to_length_left(md, Lc, 0, 1),
+            pad_to_length_left(mdp, Lc, 0, 1),
+        ])
 
-        max_answer_len = answer_ids.shape[1]
-        output["completion_input_ids"] = torch.cat(
-            (
-                pad_to_length_right(answer_ids, max_answer_len, pad_value=padding_value, dim=1),
-                pad_to_length_right(answer_ids.clone(), max_answer_len, pad_value=padding_value, dim=1),
-            ),
-            dim=0,
-        )
-        output["completion_attention_mask"] = torch.cat(
-            (
-                pad_to_length_right(answer_mask, max_answer_len, pad_value=0, dim=1),
-                pad_to_length_right(answer_mask.clone(), max_answer_len, pad_value=0, dim=1),
-            ),
-            dim=0,
-        )
-        return output
+        out["completion_input_ids"] = torch.cat([
+            batch["prompt_input_ids"], batch["prompt_input_ids"]
+        ], dim=0)
+        out["completion_attention_mask"] = torch.cat([
+            batch["prompt_attention_mask"], batch["prompt_attention_mask"]
+        ], dim=0)
+        return out
 
-    def concatenated_forward(self, model: nn.Module, batch: Dict[str, torch.LongTensor]):
-        concatenated_batch_for_model = self.concatenated_inputs(batch, padding_value=self.padding_value)
-        model_kwargs = {}
-        # if self.args.output_router_logits: # User can uncomment if using MoE models
-        #     model_kwargs["output_router_logits"] = True
+    # ---------------------------------------------------------------------
+    # Forward pass ---------------------------------------------------------
+    # ---------------------------------------------------------------------
+    def concatenated_forward(self, model: nn.Module, batch):
+        x = self.concatenated_inputs(batch, self.padding_value)
+        p_ids, p_mask = x["prompt_input_ids"], x["prompt_attention_mask"]
+        a_ids, a_mask = x["completion_input_ids"], x["completion_attention_mask"]
+
+        # 记录原始长度
+        original_doc_len = p_ids.shape[1]
+        original_ans_len = a_ids.shape[1]
         
-        effective_prompt_input_ids = concatenated_batch_for_model["prompt_input_ids"]
-        effective_prompt_attention_mask = concatenated_batch_for_model["prompt_attention_mask"]
-        effective_completion_input_ids = concatenated_batch_for_model["completion_input_ids"]
-        effective_completion_attention_mask = concatenated_batch_for_model["completion_attention_mask"]
-
-        if self.is_encoder_decoder: 
-            labels_for_model = effective_completion_input_ids.clone() 
-            if self.label_pad_token_id != -100: 
-                 labels_for_model[effective_completion_attention_mask == 0] = self.label_pad_token_id
-            
-            model_outputs = model(
-                input_ids=effective_prompt_input_ids,
-                attention_mask=effective_prompt_attention_mask,
-                labels=labels_for_model,
-                **model_kwargs,
-            )
-            raw_logits = model_outputs.logits
-            final_loss_mask = effective_completion_attention_mask.bool()
-            final_labels_for_logps = labels_for_model
-        else: 
-            input_ids = torch.cat((effective_prompt_input_ids, effective_completion_input_ids), dim=1)
-            attention_mask = torch.cat((effective_prompt_attention_mask, effective_completion_attention_mask), dim=1)
-            
-            loss_mask_for_answer_part_of_sequence = torch.cat(
-                (torch.zeros_like(effective_prompt_attention_mask), effective_completion_attention_mask),
-                dim=1,
-            )
-
-            attention_mask, input_ids, loss_mask_for_answer_part_of_sequence = flush_left(
-                attention_mask, input_ids, loss_mask_for_answer_part_of_sequence
-            )
-
-            if self.args.max_length is not None: 
-                if self.args.truncation_mode == "keep_end":
-                    input_ids = input_ids[:, -self.args.max_length :]
-                    attention_mask = attention_mask[:, -self.args.max_length :]
-                    loss_mask_for_answer_part_of_sequence = loss_mask_for_answer_part_of_sequence[:, -self.args.max_length :]
-                elif self.args.truncation_mode == "keep_start":
-                    input_ids = input_ids[:, : self.args.max_length]
-                    attention_mask = attention_mask[:, : self.args.max_length]
-                    loss_mask_for_answer_part_of_sequence = loss_mask_for_answer_part_of_sequence[:, : self.args.max_length]
-                else: 
-                    raise ValueError(f"Unknown truncation mode: {self.args.truncation_mode}")
-
-            if self.args.padding_free: 
-                raise NotImplementedError("Padding-free for overridden concatenated_forward not fully implemented here.")
+        
+        ids = torch.cat([p_ids, a_ids], 1)
+        att = torch.cat([p_mask, a_mask], 1)
+        mask = torch.cat([torch.zeros_like(p_mask), a_mask], 1)     
+        
+        # 记录截断前的信息
+        truncated = False
+        truncate_offset = 0
+        
+        if self.args.max_length and ids.shape[1] > self.args.max_length:
+            truncated = True
+            if self.args.truncation_mode == "keep_end":
+                truncate_offset = ids.shape[1] - self.args.max_length
+                ids, att, mask = (t[:, -self.args.max_length :] for t in (ids, att, mask))
             else:
-                model_kwargs["attention_mask"] = attention_mask
-            
-            model_outputs = model(input_ids, **model_kwargs)
-            raw_logits = model_outputs.logits
-
-            final_labels_for_logps = torch.roll(input_ids, shifts=-1, dims=1)
-            final_loss_mask = torch.roll(loss_mask_for_answer_part_of_sequence, shifts=-1, dims=1).bool()
-            
-            if raw_logits.shape[1] > final_labels_for_logps.shape[1]:
-                 raw_logits = raw_logits[:, raw_logits.shape[1] - final_labels_for_logps.shape[1] :, :]
-            elif raw_logits.shape[1] < final_labels_for_logps.shape[1]: 
-                 final_labels_for_logps = final_labels_for_logps[:, final_labels_for_logps.shape[1] - raw_logits.shape[1] :, :]
-                 final_loss_mask = final_loss_mask[:, final_loss_mask.shape[1] - raw_logits.shape[1] :, :]
-
-        masked_labels_for_logps_calc = final_labels_for_logps.clone()
-        masked_labels_for_logps_calc[~final_loss_mask] = 0 
-
-        per_token_logps = selective_log_softmax(raw_logits, masked_labels_for_logps_calc)
-        per_token_logps[~final_loss_mask] = 0 
-        per_token_logps_for_sum = torch.roll(per_token_logps, shifts=1, dims=1)
-        all_logps = (per_token_logps_for_sum * final_loss_mask).sum(-1)
-
-        output_dict = {}
-        output_dict["logits"] = raw_logits 
-        output_dict["labels"] = final_labels_for_logps 
-        output_dict["loss_mask"] = final_loss_mask 
-
-        original_batch_size = raw_logits.shape[0] // 2
-        output_dict["chosen_logps"] = all_logps[:original_batch_size]
-        output_dict["rejected_logps"] = all_logps[original_batch_size:]
+                ids, att, mask = (t[:, : self.args.max_length] for t in (ids, att, mask))
         
-        loss_mask_chosen_path = final_loss_mask[:original_batch_size]
-        loss_mask_rejected_path = final_loss_mask[original_batch_size:]
-        logits_chosen_path = raw_logits[:original_batch_size]
-        logits_rejected_path = raw_logits[original_batch_size:]
-
-        if loss_mask_chosen_path.any():
-            output_dict["mean_chosen_logits"] = logits_chosen_path[loss_mask_chosen_path].mean()
-        else:
-            output_dict["mean_chosen_logits"] = torch.tensor(0.0, device=raw_logits.device, dtype=raw_logits.dtype)
-
-        if loss_mask_rejected_path.any():
-            output_dict["mean_rejected_logits"] = logits_rejected_path[loss_mask_rejected_path].mean()
-        else:
-            output_dict["mean_rejected_logits"] = torch.tensor(0.0, device=raw_logits.device, dtype=raw_logits.dtype)
-
-        # if self.args.output_router_logits and hasattr(model_outputs, "aux_loss"): # User can uncomment
-        #     output_dict["aux_loss"] = model_outputs.aux_loss
-            
-        return output_dict
-
-    def _calculate_kl_loss(
-        self,
-        pred_logits: torch.Tensor,    
-        target_logits: torch.Tensor,  
-        loss_mask: torch.Tensor       
-    ) -> torch.Tensor:
-        log_probs_pred = F.log_softmax(pred_logits, dim=-1) 
-        probs_target = F.softmax(target_logits, dim=-1)    
+        out = model(ids, attention_mask=att)
+        logits = out.logits
         
-        kl_div_per_token = F.kl_div(
-            input=log_probs_pred, 
-            target=probs_target, 
-            reduction='none', 
-            log_target=False  
-        ).sum(dim=-1) 
-        
-        masked_kl_div = kl_div_per_token * loss_mask.bool() 
-
-        num_answer_tokens = loss_mask.sum()
-        if num_answer_tokens > 0:
-            kl_loss = masked_kl_div.sum() / num_answer_tokens 
+        # 计算答案在截断后序列中的位置
+        if truncated and self.args.truncation_mode == "keep_end":
+            answer_start_in_truncated = original_doc_len - truncate_offset
         else:
-            kl_loss = torch.tensor(0.0, device=pred_logits.device, dtype=pred_logits.dtype)
+            answer_start_in_truncated = original_doc_len
+
+        lbl_ids = torch.roll(ids, -1, 1)
+        mask = torch.roll(mask, shifts=-1, dims=1)
+        mask = mask.bool()
+        
+     
+        masked_lbl = lbl_ids.clone()
+        masked_lbl[~mask] = -100
+        
+        valid_labels = (masked_lbl != -100).sum()
+
+        
+        logps = selective_log_softmax(logits, lbl_ids)
+        logps[~mask] = 0
+        logps = torch.roll(logps, shifts=1, dims=1)
+
+        all_lp = logps.sum(-1)
+        half = logits.shape[0] // 2
+        
+        assert logits.shape[0] % 2 == 0, f"Batch size must be even, got {logits.shape[0]}"
+        assert half > 0, "Batch size too small"
+        
+        return {
+            "chosen_logps": logps[:half],
+            "rejected_logps": logps[half:],
+            "chosen_logits": logits[:half],
+            "rejected_logits": logits[half:],
+            "chosen_labels": masked_lbl[:half],
+            "rejected_labels": masked_lbl[half:],
+        }
+
+    def mito_loss(
+            self,
+            pred_logits,  # 修复：现在接收的是logits而不是logps
+            target_logits,
+            pred_labels,
+            target_labels,
+        ) -> torch.FloatTensor:
+
+        # 添加验证：检查输入形状
+        assert pred_logits.dim() == 3, f"Expected 3D logits, got {pred_logits.dim()}D"
+        assert target_logits.dim() == 3, f"Expected 3D logits, got {target_logits.dim()}D"
+
+        pred_logits = pred_logits.masked_fill(
+            (pred_labels == -100).unsqueeze(-1), torch.finfo(pred_logits.dtype).min
+        )
+
+        target_logits = target_logits.masked_fill(
+            (target_labels == -100).unsqueeze(-1), torch.finfo(target_logits.dtype).min
+        )
+
+        tar_prob = target_logits.view(-1, target_logits.shape[-1]).contiguous()
+        pred_prob = pred_logits.view(-1, pred_logits.shape[-1]).contiguous()
+        
+        tar_prob = F.softmax(tar_prob, dim=1)
+        pred_prob = F.log_softmax(pred_prob, dim=1)
+        
+        kl_loss = self.kldiv_loss(pred_prob, tar_prob)
+        
+        # 添加验证：确保损失在合理范围内
+        if kl_loss > 100:
+            warnings.warn(f"KL loss is unusually high: {kl_loss.item()}")
+        
         return kl_loss
 
+    # ---------------------------------------------------------------------
+    # Loss -----------------------------------------------------------------
+    # ---------------------------------------------------------------------
     def get_batch_loss_metrics(
         self,
-        model: nn.Module, 
-        batch: Dict[str, torch.LongTensor], 
+        model: nn.Module,
+        batch: Dict[str, torch.Tensor],
         train_eval: Literal["train", "eval"] = "train",
-    ) -> Tuple[torch.Tensor, Dict[str, Any]]:
-        metrics = {}
+    ):
+        output = self.concatenated_forward(model, batch)
         
-        policy_output = self.concatenated_forward(model, batch) 
+        chosen_logps = output["chosen_logps"]
+        rejected_logps = output["rejected_logps"]
+        chosen_logits = output["chosen_logits"]
+        rejected_logits = output["rejected_logits"]
+        chosen_labels = output["chosen_labels"]
+        rejected_labels = output["rejected_labels"]
 
-        num_original_examples = batch["prompt_input_ids"].shape[0]
-
-        policy_all_logits = policy_output["logits"] 
-        policy_all_labels = policy_output["labels"] 
-        policy_all_loss_mask = policy_output["loss_mask"]
-
-        policy_logits_d_plus_a = policy_all_logits[:num_original_examples]
-        policy_logits_d_prime_plus_a = policy_all_logits[num_original_examples:]
-        
-        # Determine which labels to use for SFT based on self.sft_on_d_prime
-        policy_labels_for_sft: torch.Tensor
         if self.sft_on_d_prime:
-            policy_labels_for_sft = policy_all_labels[num_original_examples:] 
-        else:
-            policy_labels_for_sft = policy_all_labels[:num_original_examples]
-            
-        policy_loss_mask_a_in_d_plus_a = policy_all_loss_mask[:num_original_examples] # Mask for 'a' in D+a path (for KL_policy)
-
-        ref_output = None
-        kl_ref = torch.tensor(0.0, device=policy_all_logits.device, dtype=policy_all_logits.dtype)
-
-        with torch.no_grad(): 
-            if self.ref_model is None: 
-                if self.is_peft_model:
-                    with self.null_ref_context(): 
-                        ref_output = self.concatenated_forward(self.model, batch)
-                else:
-                    if self.is_world_process_zero():
-                        warnings.warn(
-                            "ref_model is None and model is not PEFT. KL_ref will be zero. "
-                            "Ensure DPOConfig and model setup correctly provide/create a reference model if KL difference is desired."
-                        )
-            else: 
-                ref_output = self.concatenated_forward(self.ref_model, batch)
-
-        if ref_output is not None:
-            ref_all_logits = ref_output["logits"]
-            ref_all_loss_mask = ref_output["loss_mask"] 
-
-            ref_logits_d_plus_a = ref_all_logits[:num_original_examples]
-            ref_logits_d_prime_plus_a = ref_all_logits[num_original_examples:]
-            # Mask for 'a' in D+a path for reference model (for KL_ref)
-            ref_loss_mask_a_in_d_plus_a = ref_all_loss_mask[:num_original_examples] 
-
-            kl_ref = self._calculate_kl_loss(
-                pred_logits=ref_logits_d_plus_a,
-                target_logits=ref_logits_d_prime_plus_a,
-                loss_mask=ref_loss_mask_a_in_d_plus_a 
+            # SFT loss on D' (rejected/adv_prompt)
+            loss_sft = self.ce_loss(
+                rejected_logits.reshape(-1, rejected_logits.size(-1)),
+                rejected_labels.reshape(-1),
             )
-        
-        # --- SFT Loss Calculation (conditional) ---
-        sft_target_logits_for_loss: torch.Tensor
-        sft_loss_metric_name: str
-
-        if self.sft_on_d_prime:
-            sft_target_logits_for_loss = policy_logits_d_prime_plus_a
-            sft_loss_metric_name = "sft_on_D_prime" # D' is the rejected/adv_prompt path
         else:
-            sft_target_logits_for_loss = policy_logits_d_plus_a
-            sft_loss_metric_name = "sft_on_D" # D is the chosen/prompt path
-        
-        sft_logits_flat = sft_target_logits_for_loss.reshape(-1, sft_target_logits_for_loss.size(-1))
-        # Use the correctly selected policy_labels_for_sft
-        sft_labels_flat = policy_labels_for_sft.reshape(-1) 
-        
-        sft_loss = F.cross_entropy(
-            sft_logits_flat,
-            sft_labels_flat,
-            ignore_index=self.args.label_pad_token_id, 
-            reduction="mean" 
+            loss_sft = self.ce_loss(
+                chosen_logits.reshape(-1, chosen_logits.size(-1)),
+                chosen_labels.reshape(-1),
+            )
+
+        kl_pol = self.mito_loss(
+            pred_logits=rejected_logits,  # 现在传入logits
+            target_logits=chosen_logits,   # 现在传入logits
+            pred_labels=rejected_labels,
+            target_labels=chosen_labels,
         )
+        # total = loss_sft
+        total = loss_sft + self.mito_alpha * kl_pol
+
+        tag = "sft_d_prime" if self.sft_on_d_prime else "sft_d"
         
-        kl_policy = self._calculate_kl_loss(
-            pred_logits=policy_logits_d_plus_a,
-            target_logits=policy_logits_d_prime_plus_a,
-            loss_mask=policy_loss_mask_a_in_d_plus_a 
-        )
-
-        total_loss = sft_loss + self.mito_alpha * (kl_policy - kl_ref)
-
-        prefix = "eval_" if train_eval == "eval" else ""
-        metrics[f"{prefix}loss/{sft_loss_metric_name}"] = sft_loss.item() 
-        metrics[f"{prefix}loss/kl_policy"] = kl_policy.item()
-        if ref_output is not None: 
-            metrics[f"{prefix}loss/kl_reference"] = kl_ref.item()
-            metrics[f"{prefix}loss/kl_difference"] = (kl_policy - kl_ref).item()
-        metrics[f"{prefix}loss/mito_total"] = total_loss.item() 
-
-        metrics[f"{prefix}logps/answer_given_D_policy"] = policy_output["chosen_logps"].mean().item()
-        metrics[f"{prefix}logps/answer_given_D_prime_policy"] = policy_output["rejected_logps"].mean().item()
-        metrics[f"{prefix}mean_logits/answer_given_D_policy"] = policy_output["mean_chosen_logits"].mean().item()
-        metrics[f"{prefix}mean_logits/answer_given_D_prime_policy"] = policy_output["mean_rejected_logits"].mean().item()
+        p = "eval_" if train_eval == "eval" else ""
+        metrics: Dict[str, Any] = {
+            f"{p}loss/{tag}": loss_sft.item(),
+            # f"{p}loss/kl_policy": kl_pol.item(),
+            f"{p}loss/mito_total": total.item(),
+        }
         
-        if ref_output is not None:
-            metrics[f"{prefix}logps/answer_given_D_ref"] = ref_output["chosen_logps"].mean().item()
-            metrics[f"{prefix}logps/answer_given_D_prime_ref"] = ref_output["rejected_logps"].mean().item()
-            metrics[f"{prefix}mean_logits/answer_given_D_ref"] = ref_output["mean_chosen_logits"].mean().item()
-            metrics[f"{prefix}mean_logits/answer_given_D_prime_ref"] = ref_output["mean_rejected_logits"].mean().item()
-
-        # if self.args.output_router_logits and "aux_loss" in policy_output: # User can uncomment
-        #     aux_loss = policy_output["aux_loss"] 
-        #     total_loss += self.args.router_aux_loss_coef * aux_loss 
-        #     metrics[f"{prefix}loss/aux"] = aux_loss.item()
-        #     metrics[f"{prefix}loss/mito_total_with_aux"] = total_loss.item()
-
-        return total_loss, metrics
+        # 添加验证：确保所有损失值都是有限的
+        for key, value in metrics.items():
+            if not torch.isfinite(torch.tensor(value)):
+                raise ValueError(f"Non-finite loss detected: {key} = {value}")
+        
+        return total, metrics
