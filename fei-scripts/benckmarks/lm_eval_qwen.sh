@@ -22,8 +22,8 @@ lm_eval --model vllm \
 #     --limit 1000
 
 ## Original Qwen: triviaqa 0.272, rag_qa 0.394
-## SFT model: triviaqa 0.4148, rag_qa 0.468
-## MITO model: triviaqa 0.544, rag_qa 0.188
+## SFT model: triviaqa 0.377, rag_qa 0.465
+## MITO model: triviaqa 0.445, rag_qa 0.455
 
 
 

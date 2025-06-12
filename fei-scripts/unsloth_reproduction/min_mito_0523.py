@@ -328,21 +328,42 @@ class minimal_MITOTrainer(DPOTrainer):
                 chosen_labels.reshape(-1),
             )
 
+        ###############ref_model##############
+        compte_ref_context_manager = amp.autocast(device_type) if self._peft_has_been_casted_to_bf16 else nullcontext()
+        with torch.no_grad(), compte_ref_context_manager:
+            if self.ref_model is None:
+                with self.null_ref_context():
+                    ref_model_output = self.concatenated_forward(self.model, batch)
+            else:
+                ref_model_output = self.concatenated_forward(self.ref_model, batch)
+
+        ref_chosen_logits = ref_model_output["chosen_logits"]
+        ref_rejected_logits = ref_model_output["rejected_logits"]
+        ######################################
+
         kl_pol = self.mito_loss(
             pred_logits=rejected_logits,  # 现在传入logits
             target_logits=chosen_logits,   # 现在传入logits
             pred_labels=rejected_labels,
             target_labels=chosen_labels,
         )
+
+        kl_ref = self.mito_loss(
+            pred_logits=ref_rejected_logits,  # 现在传入logits
+            target_logits=ref_chosen_logits,   # 现在传入logits
+            pred_labels=rejected_labels,
+            target_labels=chosen_labels,
+        )
         # total = loss_sft
-        total = loss_sft + self.mito_alpha * kl_pol
+        total = loss_sft + self.mito_alpha * (kl_pol-kl_ref)
 
         tag = "sft_d_prime" if self.sft_on_d_prime else "sft_d"
         
         p = "eval_" if train_eval == "eval" else ""
         metrics: Dict[str, Any] = {
             f"{p}loss/{tag}": loss_sft.item(),
-            # f"{p}loss/kl_policy": kl_pol.item(),
+            f"{p}loss/kl_policy": kl_pol.item(),
+            f"{p}loss/kl_reference": kl_ref.item(),
             f"{p}loss/mito_total": total.item(),
         }
         

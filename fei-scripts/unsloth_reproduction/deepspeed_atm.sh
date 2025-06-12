@@ -36,7 +36,7 @@ mkdir -p $DPO_DS_PATH
 mkdir -p $MITO_DS_PATH
 
 ## Training environment
-export CUDA_VISIBLE_DEVICES=0,1,2,3,4
+export CUDA_VISIBLE_DEVICES=0,1,2,5,7
 export OMP_NUM_THREADS=64
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 # This is added to solve the conflicts of the conflicts rooted from the combination: deepspeed + HF Transformers + PyTorch 2.2+

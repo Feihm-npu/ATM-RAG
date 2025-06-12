@@ -120,14 +120,14 @@ def main():
         per_device_train_batch_size=args.batch_size,
         # gradient_accumulation_steps=args.gradient_accumulation_steps,
         ## evaluation ###########
-        evaluation_strategy=args.evaluation_strategy,
-        eval_steps=args.eval_steps,
-        save_strategy=args.evaluation_strategy, # 保存策略与评估策略对齐
-        save_steps=args.eval_steps,
-        load_best_model_at_end=True, # 关键！训练结束后加载最佳模型
-        metric_for_best_model="eval_loss", # 使用评估损失作为衡量标准
-        greater_is_better=False, # 损失越小越好
-        save_total_limit=args.save_total_limit,
+        # evaluation_strategy=args.evaluation_strategy,
+        # eval_steps=args.eval_steps,
+        # save_strategy=args.evaluation_strategy, # 保存策略与评估策略对齐
+        # save_steps=args.eval_steps,
+        # load_best_model_at_end=True, # 关键！训练结束后加载最佳模型
+        # metric_for_best_model="eval_loss", # 使用评估损失作为衡量标准
+        # greater_is_better=False, # 损失越小越好
+        # save_total_limit=args.save_total_limit,
         ####################
 
         warmup_ratio=args.warmup_ratio,
@@ -169,7 +169,7 @@ def main():
         eval_dataset=train_dataset, # Replace with a proper validation set if available
         processing_class=tokenizer, # Pass the tokenizer here (standard for DPOTrainer)
         # data_collator=None, # Defaults to DataCollatorForPreference, which should be fine
-        callbacks=[EarlyStoppingCallback(early_stopping_patience=args.early_stopping_patience)],
+        # callbacks=[EarlyStoppingCallback(early_stopping_patience=args.early_stopping_patience)],
         # mito_alpha=args.beta_mito
     )
     logger.info("minimal_MITOTrainer initialized.")
