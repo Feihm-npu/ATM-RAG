@@ -2,15 +2,13 @@ export VLLM_WORKER_MULTIPROC_METHOD=spawn
 export CUDA_VISIBLE_DEVICES=1,2
 
 lm_eval --model vllm \
-    --model_args pretrained=/home/feihm/llm-fei/ATM-RAG/fei-scripts/unsloth_reproduction/pre_exp/finetuned_model/model_mito_final,tensor_parallel_size=2,dtype=auto   \
+    --model_args pretrained=/home/feihm/llm-fei/ATM-RAG/fei-scripts/unsloth_reproduction/pre_exp/finetuned_model_0612/model_mito_final,tensor_parallel_size=2,dtype=auto   \
     --tasks triviaqa,rag_qa_advanced \
-    --write_out \
-    --log_samples \
-    --output_path /home/feihm/llm-fei/ATM-RAG/fei-scripts/benckmarks/result4sft_0611 \
     --batch_size auto:8 \
-    --limit 1000
 
-
+    # --write_out \
+    # --log_samples \
+    # --output_path /home/feihm/llm-fei/ATM-RAG/fei-scripts/benckmarks/result4mito_0612 \
 
 # lm_eval --model vllm \
 #     --model_args pretrained=Qwen/Qwen2.5-7B-Instruct,tensor_parallel_size=4,dtype=auto   \
@@ -42,3 +40,9 @@ lm_eval --model vllm \
 # |---------------|------:|-----------------|-----:|-----------|---|----:|---|-----:|
 # |rag_qa_advanced|      1|remove_whitespace|     0|exact_match|↑  |0.465|±  |0.0158|
 # |triviaqa       |      3|remove_whitespace|     0|exact_match|↑  |0.377|±  |0.0153|
+
+
+# |     Tasks     |Version|     Filter      |n-shot|  Metric   |   |Value |   |Stderr|
+# |---------------|------:|-----------------|-----:|-----------|---|-----:|---|-----:|
+# |rag_qa_advanced|      1|remove_whitespace|     0|exact_match|↑  |0.4925|±  |0.0112|
+# |triviaqa       |      3|remove_whitespace|     0|exact_match|↑  |0.1746|±  |0.0028|

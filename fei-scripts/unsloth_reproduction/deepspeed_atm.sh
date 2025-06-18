@@ -16,7 +16,7 @@ PRE_EXP=./pre_exp
 
 ADV_MODEL_PATH=${EXP_PATH}/adv_model/
 ADV_MODEL_VLLM_PATH=${EXP_PATH}/adv_model_vllm/
-GEN_MODEL_PATH=${PRE_EXP}/finetuned_model/
+GEN_MODEL_PATH=${PRE_EXP}/finetuned_model_0612/
 GEN_MODEL_VLLM_PATH=${EXP_PATH}/gen_model_vllm/
 
 FAB_DS_PATH=${PRE_EXP}/fab_ds/
