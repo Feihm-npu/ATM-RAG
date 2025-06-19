@@ -2,12 +2,13 @@ import os
 import argparse
 from datasets import load_dataset
 import torch
+import time
 # transformers.AutoModel is used, assuming it's Unsloth's FastLanguageModel or compatible
 from transformers import TrainingArguments, AutoTokenizer, AutoModelForCausalLM, EarlyStoppingCallback
 from peft import PeftModel
 from transformers.trainer_utils import is_main_process
-# from accelerate import Accelerator # Added Accelerator
-
+from accelerate import Accelerator # Added Accelerator
+accelerator = Accelerator()
 # Ensure this import points to the file containing your minimal_MITOTrainer class
 # from min_mito_0523 import minimal_MITOTrainer, MITOConfig
 # For this example, let's assume minimal_MITOTrainer and MITOConfig are defined elsewhere
@@ -20,7 +21,7 @@ from min_mito_0523 import MITOConfig, minimal_MITOTrainer
 
 from transformers.utils import logging
 logger = logging.get_logger(__name__)
-
+logging.set_verbosity_debug()
 
 from typing import Dict # Ensure Dict is imported
 
@@ -118,6 +119,7 @@ def main():
     dpo_config = MITOConfig(
         model_init_kwargs=model_kwargs,
         per_device_train_batch_size=args.batch_size,
+        save_strategy="no",
         # gradient_accumulation_steps=args.gradient_accumulation_steps,
         ## evaluation ###########
         # evaluation_strategy=args.evaluation_strategy,
@@ -168,35 +170,24 @@ def main():
         train_dataset=train_dataset,
         eval_dataset=train_dataset, # Replace with a proper validation set if available
         processing_class=tokenizer, # Pass the tokenizer here (standard for DPOTrainer)
-        # data_collator=None, # Defaults to DataCollatorForPreference, which should be fine
-        # callbacks=[EarlyStoppingCallback(early_stopping_patience=args.early_stopping_patience)],
-        # mito_alpha=args.beta_mito
     )
     logger.info("minimal_MITOTrainer initialized.")
 
     logger.info("Starting MITO training...")
+    t0 = time.time()
     mito_trainer.train()
+    logger.info("train() complete in %.2fs", time.time() - t0)
     logger.info("MITO training finished.")
     
-    # Save the final model
-    # Ensure all processes are synchronized before saving.
 
     final_save_path = os.path.join(args.output_dir, "model_mito_final")
-    
-    # Save model and tokenizer only on the main process
+
     logger.info(f"Saving model to {final_save_path}...")
-    # DPOTrainer.save_model() should handle PEFT adapters correctly.
-    # If not using PEFT, it saves the full model.
-    # The model passed to save_model should be the original one if it was wrapped.
-    # However, trainer.save_model() is designed to handle this.
-    # If you were saving manually:
-    # unwrapped_model = accelerator.unwrap_model(model)
-    # unwrapped_model.save_pretrained(final_save_path)
-    if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
-        mito_trainer.save_model(final_save_path) 
-        tokenizer.save_pretrained(final_save_path)
-        logger.info(f"Successfully completed training. Model saved to: {final_save_path}")
-    
+    mito_trainer.save_model(final_save_path) 
+    if accelerator.is_main_process:
+        import wandb
+        wandb.finish()
+
 
 if __name__ == "__main__":
     main()

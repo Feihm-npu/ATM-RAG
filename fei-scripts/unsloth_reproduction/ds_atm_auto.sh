@@ -32,7 +32,7 @@ mkdir -p $SFT_DS_PATH
 
 
 ## Training environment
-export CUDA_VISIBLE_DEVICES=2,3,4,5,6,7
+export CUDA_VISIBLE_DEVICES=0,3,4,5,6,7
 export OMP_NUM_THREADS=64
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 # This is added to solve the conflicts of the conflicts rooted from the combination: deepspeed + HF Transformers + PyTorch 2.2+
@@ -138,19 +138,36 @@ echo "************************** MITO Iteration ********************************
 echo "*********************************************************************************"
 echo "*********************************************************************************"
 
-TOTAL_EPOCHS=1
+TOTAL_EPOCHS=2
 CURRENT_EPOCH=0
 
 for ((i=0; i<TOTAL_EPOCHS; i++)); do
     echo "EPOCH ${i}/${TOTAL_EPOCHS} starts"
 
-    EPOCH_PATH=${EXP_PATH}/epoch_${i}/
+    if [ $i -eq 0 ]; then
+        echo "This is the first epoch, using the SFT model as the initial model, using the original adversarial model."
+        FT_MODEL_PATH=${FT_MODEL_PATH}
+        ORI_ADV_MODEL=${ORI_ADV_MODEL}
+        FAB_DS_PATH=${FAB_DS_PATH}
+    else
+        echo "Using the model from the previous epoch."
+        FT_MODEL_PATH=${EXP_PATH}/epoch_$((i-1))/gen_model/model_mito_final/
+        ORI_ADV_MODEL=${EXP_PATH}/epoch_$((i-1))/adv_model/
+        FAB_DS_PATH=${MITO_DS_PATH}
+        # FT_MODEL_PATH: the path of the model for generating ppl and continue for mito training.
+        # ORI_ADV_MODEL: the path of the original adversarial model, which is used for generating the DPO dataset. 
+        # After the first epoch, it will be the model from the previous epoch.
+        # FAB_DS_PATH: the path of the FAB dataset, which is used for generating the DPO dataset. Will update in each epoch.
+    fi
+    EPOCH_PATH=${EXP_PATH}/epoch_${i}
     DPO_DS_PATH=${EPOCH_PATH}/fab_dpo/
     MITO_DS_PATH=${EPOCH_PATH}/fab_mito/
-    MITO_MODEL_PATH=${EPOCH_PATH}/mito_model/
+    # MITO_MODEL_PATH=${EPOCH_PATH}/mito_model/
     GEN_MODEL_PATH=${EPOCH_PATH}/gen_model/
     ADV_MODEL_PATH=${EPOCH_PATH}/adv_model/
-    mkdir -p $EPOCH_PATH $DPO_DS_PATH $MITO_DS_PATH $MITO_MODEL_PATH $GEN_MODEL_PATH
+
+
+    mkdir -p $EPOCH_PATH $DPO_DS_PATH $MITO_DS_PATH $GEN_MODEL_PATH
 
     ########### Step 2: DPO Dataset Generation ###########
     echo "Step 2: DPO score generation"
@@ -261,7 +278,7 @@ for ((i=0; i<TOTAL_EPOCHS; i++)); do
 
     ########### Step 5: MITO Training ###########
     echo "Step 5: MITO Training"
-    if [ -f "${GEN_MODEL_PATH}config.json" ]; then
+    if [ -f "${GEN_MODEL_PATH}model_mito_final/config.json" ]; then
         echo "Generator model already exists. Skipping MITO training."
     else
         accelerate launch --config_file ds_configs/default_config.yaml mito_ds.py \
@@ -271,7 +288,7 @@ for ((i=0; i<TOTAL_EPOCHS; i++)); do
             --max_steps 10 \
             --output_dir $GEN_MODEL_PATH
 
-        if [ ! -f "${GEN_MODEL_PATH}config.json" ]; then
+        if [ ! -f "${GEN_MODEL_PATH}model_mito_final/config.json" ]; then
             echo "Error: MITO training failed!"
             exit 1
         fi
@@ -281,4 +298,4 @@ for ((i=0; i<TOTAL_EPOCHS; i++)); do
     echo "-----------------------------------------------------"
 done
 
-echo "All steps completed successfully!"
+echo "EPOCH ${CURRENT_EPOCH+1}/${TOTAL_EPOCHS} completed successfully!"
